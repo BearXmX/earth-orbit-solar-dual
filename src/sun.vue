@@ -989,7 +989,7 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
     .add(horizontal.clone().multiplyScalar(radius * 0.42))
     .add(new THREE.Vector3(0, radius * 0.26, 0))
 
-  altitudeAngleGroup.add(createSpriteText(`太阳高度角 h = ${shownAltitude.toFixed(1)}°`, '#fff1b8', labelPos, 0.2))
+  altitudeAngleGroup.add(createSpriteText(`太阳高度角 h = ${formatDeg(runtimeMetrics.value.altitude)}`, '#fff1b8', labelPos, 0.2))
 }
 
 function createAngleSector(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir: THREE.Vector3, radius: number, color: number, opacity = 0.18) {
