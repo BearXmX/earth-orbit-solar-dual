@@ -4,6 +4,16 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
+let currentMode = 'standard'
+
+const modeArgIndex = process.argv.findIndex(item => item === '--mode')
+
+if (modeArgIndex !== -1 && process.argv[modeArgIndex + 1]) {
+  currentMode = process.argv[modeArgIndex + 1]
+}
+
+const isStandard = currentMode === 'standard'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -39,7 +49,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '地球自转与公转-常规版',
+    outDir: `地球自转与公转-${isStandard ? '标准版' : '进阶版'}`,
     assetsDir: 'assets',
     copyPublicDir: true, // 开启public目录复制（如果textures在public下）
     rollupOptions: {

@@ -2,7 +2,7 @@
   <div ref="wrapRef" class="sun-lite">
     <div ref="canvasWrapRef" class="canvas-wrap"></div>
 
-    <div class="legend-panel">
+    <!--     <div class="legend-panel">
       <div class="legend-title">图例</div>
       <div><i class="dot yellow"></i> 当前太阳</div>
       <div><i class="dot current"></i> 当前日期路径</div>
@@ -11,7 +11,7 @@
       <div><i class="dot cyan"></i> 冬至路径</div>
       <div><i class="dot shadow"></i> 建筑原生阴影</div>
       <div><i class="dot ray"></i> 太阳直射光线</div>
-    </div>
+    </div> -->
 
     <div class="mini-hud">
       <div>
@@ -428,7 +428,7 @@ function createModernCityTower(opts: CityBuildingOpts & { glassColor?: number; a
     [opts.width / 2, opts.depth / 2],
   ].forEach(([cx, cz]) => {
     const edge = new THREE.Mesh(new THREE.BoxGeometry(edgeSize, opts.height + 0.04, edgeSize), accentMat)
-    edge.position.set(opts.x + cx, opts.height / 2 + 0.1, opts.z + cz)
+    edge.position.set(opts.x + cx!, opts.height / 2 + 0.1, opts.z + cz!)
     applyMeshShadowSettings(edge)
     schoolGroup.add(edge)
   })
