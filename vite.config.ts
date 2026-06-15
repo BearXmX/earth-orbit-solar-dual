@@ -3,6 +3,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
+import { viteSingleFile } from 'vite-plugin-singlefile'
 
 let currentMode = 'standard'
 
@@ -18,6 +19,7 @@ const isStandard = currentMode === 'standard'
 export default defineConfig({
   plugins: [
     vue(),
+    viteSingleFile(),
     vueDevTools(),
     {
       name: 'fix-html-for-file-protocol',

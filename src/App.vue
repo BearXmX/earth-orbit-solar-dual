@@ -155,14 +155,25 @@
             <el-button size="small" :type="layers.sunRays ? 'primary' : 'default'" @click="layers.sunRays = !layers.sunRays">太阳光</el-button>
             <el-button size="small" :type="layers.equator ? 'primary' : 'default'" @click="layers.equator = !layers.equator">赤道面</el-button>
             <el-button size="small" :type="layers.ecliptic ? 'primary' : 'default'" @click="layers.ecliptic = !layers.ecliptic">黄道面</el-button>
-            <el-button size="small" :type="layers.tiltAngle ? 'primary' : 'default'" @click="layers.tiltAngle = !layers.tiltAngle">夹角标注</el-button>
+            <el-button size="small" :type="layers.tiltAngle ? 'primary' : 'default'" @click="layers.tiltAngle = !layers.tiltAngle"
+              >夹角标注</el-button
+            >
             <el-button size="small" :type="layers.zones ? 'primary' : 'default'" @click="layers.zones = !layers.zones">地球五带</el-button>
             <el-button size="small" :type="layers.tropics ? 'primary' : 'default'" @click="layers.tropics = !layers.tropics">回归线</el-button>
             <el-button size="small" :type="layers.orbit ? 'primary' : 'default'" @click="layers.orbit = !layers.orbit">公转轨道</el-button>
             <el-button size="small" :type="layers.subsolar ? 'primary' : 'default'" @click="layers.subsolar = !layers.subsolar">直射点</el-button>
-            <el-button size="small" :type="layers.axisArrow ? 'primary' : 'default'" @click="layers.axisArrow = !layers.axisArrow">地轴箭头</el-button>
-            <el-button size="small" :type="layers.orbitDirection ? 'primary' : 'default'" @click="layers.orbitDirection = !layers.orbitDirection">公转方向</el-button>
-            <el-button size="small" :type="layers.rotationDirection ? 'primary' : 'default'" @click="layers.rotationDirection = !layers.rotationDirection">自转方向</el-button>
+            <el-button size="small" :type="layers.axisArrow ? 'primary' : 'default'" @click="layers.axisArrow = !layers.axisArrow"
+              >地轴箭头</el-button
+            >
+            <el-button size="small" :type="layers.orbitDirection ? 'primary' : 'default'" @click="layers.orbitDirection = !layers.orbitDirection"
+              >公转方向</el-button
+            >
+            <el-button
+              size="small"
+              :type="layers.rotationDirection ? 'primary' : 'default'"
+              @click="layers.rotationDirection = !layers.rotationDirection"
+              >自转方向</el-button
+            >
           </div>
         </section>
 
@@ -264,7 +275,6 @@
                 <span>24时</span>
               </div>
             </div>
-
           </div>
 
           <div class="floating-card formula-card" v-show="formulaPanelVisible">
@@ -534,7 +544,9 @@ const seasonCompareTip = computed(() => {
   return tips[activeTerm.value.name] || '拖动公转位置，观察太阳直射点、昼夜长短和晨昏线倾斜方向的同步变化。'
 })
 
-const distanceMisconceptionTip = computed(() => '四季差异主要不是由地球离太阳远近决定，而是由地轴倾斜造成的太阳直射点移动、正午太阳高度和昼夜长短变化决定。')
+const distanceMisconceptionTip = computed(
+  () => '四季差异主要不是由地球离太阳远近决定，而是由地轴倾斜造成的太阳直射点移动、正午太阳高度和昼夜长短变化决定。',
+)
 
 const dayNightRatio = computed(() => {
   const info = dayLengthInfo(selectedPoint.lat, solar.value.declination)
@@ -549,7 +561,6 @@ const dayNightRatio = computed(() => {
     nightPercent: clamp((nightHours / 24) * 100, 0, 100),
   }
 })
-
 
 const formulaRows = computed(() => {
   const n = dayNo.value
@@ -646,12 +657,37 @@ const localSolarMinutes = computed({
   },
 })
 
+watch([dateValue, rayCount, lightIntensity, nightBrightness, cityLightStrength, () => selectedPoint.lat, () => selectedPoint.lng], () => {
+  if (!playing.value) updateEarthScene()
+})
+
+// 静态图层需要重建 Mesh。播放演示时也要立即响应，
+// 否则赤道面、黄道面、地球五带、夹角标注等按钮只会改变状态，不会重新创建场景对象。
 watch(
-  [dateValue, rayCount, lightIntensity, nightBrightness, cityLightStrength, () => selectedPoint.lat, () => selectedPoint.lng, () => ({ ...layers })],
+  () => [
+    layers.grid,
+    layers.equator,
+    layers.ecliptic,
+    layers.tiltAngle,
+    layers.zones,
+    layers.tropics,
+    layers.orbit,
+    layers.axisArrow,
+    layers.orbitDirection,
+    layers.rotationDirection,
+  ],
   () => {
-    if (!playing.value) updateEarthScene()
+    updateEarthScene()
   },
-  { deep: true },
+)
+
+// 动态图层本身由 updateAnimatedOrbitFrame 每帧更新；这里补一次，
+// 确保暂停状态下切换晨昏线、太阳光、直射点时也立刻同步。
+watch(
+  () => [layers.terminator, layers.sunRays, layers.subsolar],
+  () => {
+    updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  },
 )
 
 watch(utcMinutes, value => {
@@ -1416,7 +1452,15 @@ function createAxisDirectionArrow() {
   group.add(southDot)
 
   const northLabel = alwaysLabelSprite('地轴指向北极星附近', '#c7d2fe', 0.082, end.clone().add(new THREE.Vector3(0.16, 0.08, 0)))
-  const axisLabel = alwaysLabelSprite('地轴', '#c7d2fe', 0.066, axis.clone().multiplyScalar(EARTH_R * 1.32).add(new THREE.Vector3(0.12, -0.03, 0)))
+  const axisLabel = alwaysLabelSprite(
+    '地轴',
+    '#c7d2fe',
+    0.066,
+    axis
+      .clone()
+      .multiplyScalar(EARTH_R * 1.32)
+      .add(new THREE.Vector3(0.12, -0.03, 0)),
+  )
   ;[northLabel, axisLabel].forEach(sprite => {
     sprite.renderOrder = 44
     const material = sprite.material as THREE.SpriteMaterial
@@ -1532,9 +1576,10 @@ function createHeatZones() {
 
   zones.forEach(zone => {
     group.add(createLatitudeBand(zone.min, zone.max, zone.color, zone.opacity))
-    group.add(alwaysLabelSprite(zone.text, `#${zone.color.toString(16).padStart(6, '0')}`, 0.118, latLngToVector(zone.labelLat, -132, EARTH_R * 1.145)))
+    group.add(
+      alwaysLabelSprite(zone.text, `#${zone.color.toString(16).padStart(6, '0')}`, 0.118, latLngToVector(zone.labelLat, -132, EARTH_R * 1.145)),
+    )
   })
-
   ;[-66.56, -23.44, 0, 23.44, 66.56].forEach(lat => {
     const points: THREE.Vector3[] = []
     for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, EARTH_R * 1.092))
@@ -1936,7 +1981,7 @@ function setTerm(term: Term) {
   // 手动选择节气，回到当天 0 点。
   localSolarMinutes.value = 0
   runtimeUtcMinutes = utcMinutes.value
-  updateAnimatedOrbitFrame(autoOrbitDay, runtimeUtcMinutes)
+  updateEarthScene()
 }
 
 function setDateByDay(day: number, syncAuto = true) {
@@ -1949,7 +1994,7 @@ function setDateByDay(day: number, syncAuto = true) {
     // 手动拖动公转日期时，回到当天 0 点。
     localSolarMinutes.value = 0
     runtimeUtcMinutes = utcMinutes.value
-    updateAnimatedOrbitFrame(autoOrbitDay, runtimeUtcMinutes)
+    updateEarthScene()
   }
 }
 
@@ -3309,5 +3354,4 @@ function clamp(value: number, min: number, max: number) {
   flex: 1;
   margin-left: 0;
 }
-
 </style>

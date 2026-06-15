@@ -358,12 +358,12 @@ function createCityRoadNetwork() {
 function createCityBlocks() {
   const blockCenters = [-3.75, 0, 3.75]
   const palettes = [0x8ecae6, 0xffb703, 0xfb8500, 0xbde0fe, 0xcdb4db, 0xa7c957, 0xffafcc, 0x90dbf4, 0xfed9b7, 0x98f5e1, 0xf4a261, 0xa5b4fc]
-  const modernTowerBlocks = new Set([4, 5, 7])
+  const modernTowerBlocks = new Set([4])
   let blockIndex = 0
 
   for (const z of blockCenters) {
     for (const x of blockCenters) {
-      const buildingsInBlock = blockIndex === 4 ? 5 : 4
+      const buildingsInBlock = blockIndex === 4 ? 3 : 2
       for (let i = 0; i < buildingsInBlock; i++) {
         const col = i % 3
         const row = Math.floor(i / 3)
@@ -384,7 +384,7 @@ function createCityBlocks() {
           floors: Math.max(3, Math.round(height / 0.18)),
         }
 
-        if (modernTowerBlocks.has(blockIndex) && i < 2) {
+        if (modernTowerBlocks.has(blockIndex) && i < 1) {
           createModernCityTower({
             ...base,
             width: width * 1.55,
@@ -437,7 +437,7 @@ function createModernCityTower(opts: CityBuildingOpts & { glassColor?: number; a
   windowLightItems.push({ material: windowMat, seed: opts.x * 10 + opts.z })
   for (let r = 0; r < floors; r++) {
     const y = 0.24 + (r * (opts.height - 0.18)) / floors
-    for (let c = -2; c <= 2; c++) {
+    for (let c = -1; c <= 1; c++) {
       const wx = opts.x + (c / 2.8) * opts.width * 0.36
       const front = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.038), windowMat)
       front.position.set(wx, y + 0.08, opts.z - opts.depth / 2 - 0.004)
@@ -490,7 +490,7 @@ function createCartoonCityBuilding(opts: CityBuildingOpts) {
 
   const frontZ = opts.z - opts.depth / 2 - 0.006
   for (let r = 0; r < floors; r++) {
-    for (let c = -1; c <= 1; c++) {
+    for (let c = -1; c <= 1; c += 2) {
       const winMat = new THREE.MeshBasicMaterial({ color: 0xdff7ff, transparent: true, opacity: 0.78, side: THREE.DoubleSide })
       windowLightItems.push({ material: winMat, seed: opts.x * 10 + opts.z + r + c })
       const win = new THREE.Mesh(new THREE.PlaneGeometry(opts.width * 0.16, (opts.height / floors) * 0.38), winMat)
@@ -520,7 +520,7 @@ function createRoadsideTreeBelts() {
   const positions: Array<[number, number]> = []
 
   for (const roadOffset of roadOffsets) {
-    for (let t = -5.25; t <= 5.25; t += 1.25) {
+    for (let t = -5.25; t <= 5.25; t += 2.5) {
       if (roadOffsets.some(offset => Math.abs(t - offset) < 0.42)) continue
       positions.push([roadOffset - treeOffset, t], [roadOffset + treeOffset, t])
       positions.push([t, roadOffset - treeOffset], [t, roadOffset + treeOffset])
@@ -553,7 +553,7 @@ function createCityTimeElements() {
   const lampOffset = 0.52
 
   for (const roadOffset of roadOffsets) {
-    for (let t = -5.25; t <= 5.25; t += 1.38) {
+    for (let t = -5.25; t <= 5.25; t += 2.76) {
       if (roadOffsets.some(offset => Math.abs(t - offset) < 0.4)) continue
       createStreetLamp(roadOffset - lampOffset, t, 0)
       createStreetLamp(roadOffset + lampOffset, t, Math.PI)
