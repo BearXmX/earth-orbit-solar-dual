@@ -29,8 +29,9 @@
         <el-button size="small" round :type="legendVisible ? 'primary' : 'default'" @click="legendVisible = !legendVisible">
           {{ legendVisible ? '隐藏图例' : '显示图例' }}
         </el-button>
-        <el-button size="small" round :type="subsolarChartVisible ? 'primary' : 'default'" @click="subsolarChartVisible = !subsolarChartVisible">
-          {{ subsolarChartVisible ? '隐藏折线图' : '显示折线图' }}
+
+        <el-button size="small" round :type="miniCameraVisible ? 'primary' : 'default'" @click="miniCameraVisible = !miniCameraVisible">
+          {{ miniCameraVisible ? '隐藏副相机' : '显示副相机' }}
         </el-button>
         <el-button v-if="isAdvanced" size="small" round type="primary" :class="{ active: solarVisible }" @click="solarVisible = !solarVisible">
           {{ solarVisible ? '收起联动' : '太阳视运动联动' }}
@@ -148,7 +149,24 @@
           <div class="panel-title"><i></i><span>显示图层</span></div>
 
           <div class="layer-grid">
-            <el-button size="small" :type="layers.grid ? 'primary' : 'default'" @click="layers.grid = !layers.grid">经纬线</el-button>
+            <el-button size="small" :type="layers.longitudeLines ? 'primary' : 'default'" @click="layers.longitudeLines = !layers.longitudeLines"
+              >经度线</el-button
+            >
+            <el-button size="small" :type="layers.latitudeLines ? 'primary' : 'default'" @click="layers.latitudeLines = !layers.latitudeLines"
+              >纬度线</el-button
+            >
+            <el-button size="small" :type="layers.longitudeLabels ? 'primary' : 'default'" @click="layers.longitudeLabels = !layers.longitudeLabels"
+              >经度标注</el-button
+            >
+            <el-button size="small" :type="layers.latitudeLabels ? 'primary' : 'default'" @click="layers.latitudeLabels = !layers.latitudeLabels"
+              >纬度标注</el-button
+            >
+            <el-button
+              size="small"
+              :type="layers.latitudeNightArc ? 'primary' : 'default'"
+              @click="layers.latitudeNightArc = !layers.latitudeNightArc"
+              >纬线夜弧</el-button
+            >
             <el-button size="small" :type="layers.terminator ? 'primary' : 'default'" @click="layers.terminator = !layers.terminator"
               >晨昏线</el-button
             >
@@ -275,6 +293,34 @@
                 <span>24时</span>
               </div>
             </div>
+
+            <div class="observer-subsolar-chart">
+              <div class="day-night-head">
+                <b>直射点纬度年变化</b>
+                <span>当前 {{ signedDeg(solar.declination) }}</span>
+              </div>
+              <svg class="subsolar-chart" viewBox="0 0 280 142" preserveAspectRatio="none">
+                <line
+                  v-for="line in subsolarChartGridLines"
+                  :key="line.label"
+                  x1="34"
+                  x2="268"
+                  :y1="line.y"
+                  :y2="line.y"
+                  class="chart-grid-line"
+                  :class="line.main ? 'main' : ''"
+                />
+                <text v-for="line in subsolarChartGridLines" :key="`${line.label}-text`" x="4" :y="line.y + 3" class="chart-y-label">
+                  {{ line.label }}
+                </text>
+                <polyline :points="subsolarTrendLine" class="chart-trend-line" />
+                <circle :cx="currentSubsolarChartPoint.x" :cy="currentSubsolarChartPoint.y" r="4" class="chart-current-dot" />
+                <text :x="currentSubsolarChartPoint.x + 7" :y="currentSubsolarChartPoint.y - 7" class="chart-current-text">当前</text>
+                <text x="34" y="137" class="chart-x-label">1月</text>
+                <text x="146" y="137" class="chart-x-label">年中</text>
+                <text x="246" y="137" class="chart-x-label">12月</text>
+              </svg>
+            </div>
           </div>
 
           <div class="floating-card formula-card" v-show="formulaPanelVisible">
@@ -313,32 +359,13 @@
             </div>
           </div>
 
-          <div class="floating-card subsolar-chart-card" v-show="subsolarChartVisible">
-            <div class="float-head">
-              <b>直射点纬度年变化</b>
-              <span>当前 {{ signedDeg(solar.declination) }}</span>
+          <div ref="miniCameraUiRef" class="mini-camera-ui" v-show="miniCameraVisible">
+            <div ref="miniCameraCanvasRef" class="mini-camera-canvas-host"></div>
+            <div class="mini-camera-select-row" @pointerdown.stop @click.stop @wheel.stop>
+              <el-select v-model="miniCameraMode" size="small" class="mini-camera-select" popper-class="mini-camera-select-popper">
+                <el-option v-for="item in miniCameraModes" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
             </div>
-            <svg class="subsolar-chart" viewBox="0 0 280 142" preserveAspectRatio="none">
-              <line
-                v-for="line in subsolarChartGridLines"
-                :key="line.label"
-                x1="34"
-                x2="268"
-                :y1="line.y"
-                :y2="line.y"
-                class="chart-grid-line"
-                :class="line.main ? 'main' : ''"
-              />
-              <text v-for="line in subsolarChartGridLines" :key="`${line.label}-text`" x="4" :y="line.y + 3" class="chart-y-label">
-                {{ line.label }}
-              </text>
-              <polyline :points="subsolarTrendLine" class="chart-trend-line" />
-              <circle :cx="currentSubsolarChartPoint.x" :cy="currentSubsolarChartPoint.y" r="4" class="chart-current-dot" />
-              <text :x="currentSubsolarChartPoint.x + 7" :y="currentSubsolarChartPoint.y - 7" class="chart-current-text">当前</text>
-              <text x="34" y="137" class="chart-x-label">1月</text>
-              <text x="146" y="137" class="chart-x-label">年中</text>
-              <text x="246" y="137" class="chart-x-label">12月</text>
-            </svg>
           </div>
 
           <!--           <div class="floating-card tip-card">
@@ -389,6 +416,7 @@ import SunLite from './sun.vue'
 type FocusCenter = 'sun' | 'earth'
 type CameraMode = 'overview' | 'north' | 'ecliptic' | 'point'
 type LessonPresetKey = 'beijingSummerNoon' | 'beijingWinterNoon' | 'equatorEquinoxNoon' | 'arcticSummerNoon' | 'arcticWinterNoon'
+type MiniCameraMode = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
 
 interface Term {
   name: string
@@ -405,6 +433,8 @@ interface City {
 const isAdvanced = computed(() => import.meta.env.DEV || String(import.meta.env.VITE_APP_EDITION || 'advanced') !== 'standard')
 
 const earthRef = ref<HTMLDivElement | null>(null)
+const miniCameraUiRef = ref<HTMLDivElement | null>(null)
+const miniCameraCanvasRef = ref<HTMLDivElement | null>(null)
 
 const dateValue = ref('2026-06-21')
 const utcMinutes = ref(4 * 60)
@@ -422,6 +452,17 @@ const dataPanelVisible = ref(true)
 const formulaPanelVisible = ref(true)
 const legendVisible = ref(true)
 const subsolarChartVisible = ref(true)
+const miniCameraVisible = ref(false)
+const miniCameraMode = ref<MiniCameraMode>('front')
+
+const miniCameraModes = [
+  { value: 'front', label: '前·昼半球' },
+  { value: 'back', label: '后·夜半球' },
+  { value: 'left', label: '左·晨线' },
+  { value: 'right', label: '右·昏线' },
+  { value: 'top', label: '上·北极' },
+  { value: 'bottom', label: '下·南极' },
+] as const
 
 const selectedPoint = reactive({
   name: '北京',
@@ -431,6 +472,11 @@ const selectedPoint = reactive({
 
 const layers = reactive({
   grid: true,
+  longitudeLines: true,
+  latitudeLines: true,
+  longitudeLabels: false,
+  latitudeLabels: false,
+  latitudeNightArc: false,
   terminator: true,
   sunRays: true,
   equator: false,
@@ -472,12 +518,17 @@ const AXIAL_TILT = 23.44
 let earthRenderer: THREE.WebGLRenderer | null = null
 let earthScene: THREE.Scene | null = null
 let earthCamera: THREE.PerspectiveCamera | null = null
+let miniCamera: THREE.PerspectiveCamera | null = null
+let miniRenderer: THREE.WebGLRenderer | null = null
+let miniResizeObserver: ResizeObserver | null = null
+let lastMiniRenderTime = 0
 let earthControls: OrbitControls | null = null
 let orbitLayer: THREE.Group | null = null
 let animatedOrbitLayer: THREE.Group | null = null
 let dynamicTerminatorGroup: THREE.Group | null = null
 let dynamicDawnLine: THREE.Line | null = null
 let dynamicDuskLine: THREE.Line | null = null
+let latitudeLightMaterials: THREE.ShaderMaterial[] = []
 let dynamicSunRayGroup: THREE.Group | null = null
 let dynamicSunRayItems: Array<{ line: THREE.Line; arrow: THREE.Mesh }> = []
 let dynamicSubsolarGroup: THREE.Group | null = null
@@ -498,6 +549,21 @@ let earthSphere: THREE.Mesh | null = null
 let earthMaterial: THREE.ShaderMaterial | null = null
 let cachedSunTexture: THREE.Texture | null = null
 let earthResize: ResizeObserver | null = null
+const rendererSize = new THREE.Vector2()
+let earthRendererResizeDirty = true
+let miniRendererResizeDirty = true
+let lastEarthCssWidth = 0
+let lastEarthCssHeight = 0
+let lastMiniCssWidth = 0
+let lastMiniCssHeight = 0
+const miniEarthPos = new THREE.Vector3()
+const miniSunPos = new THREE.Vector3()
+const miniAxisDir = new THREE.Vector3()
+const miniSunDir = new THREE.Vector3()
+const miniViewDir = new THREE.Vector3()
+const miniTargetPos = new THREE.Vector3()
+const miniCameraUp = new THREE.Vector3()
+const miniQuat = new THREE.Quaternion()
 
 let pointerDownAt = { x: 0, y: 0 }
 const pointer = new THREE.Vector2()
@@ -507,6 +573,10 @@ let lastTime = 0
 let autoOrbitDay = 172
 let runtimeUtcMinutes = 4 * 60
 let lastAutoDateSync = 0
+let suppressSceneUpdate = false
+let cameraTweenToken = 0
+let orbitTweenToken = 0
+let tweenOrbitVisualDay: number | null = null
 
 const dateObj = computed(() => {
   const date = new Date(`${dateValue.value}T00:00:00Z`)
@@ -541,7 +611,7 @@ const seasonCompareTip = computed(() => {
     秋分: '秋分附近：太阳再次直射赤道，全球昼夜接近等长，可与春分对比太阳高度变化。',
     冬至: '冬至附近：太阳直射南回归线，北半球昼短夜长，北极圈内出现极夜。',
   }
-  return tips[activeTerm.value.name] || '拖动公转位置，观察太阳直射点、昼夜长短和晨昏线倾斜方向的同步变化。'
+  return tips[activeTerm.value!.name] || '拖动公转位置，观察太阳直射点、昼夜长短和晨昏线倾斜方向的同步变化。'
 })
 
 const distanceMisconceptionTip = computed(
@@ -658,14 +728,17 @@ const localSolarMinutes = computed({
 })
 
 watch([dateValue, rayCount, lightIntensity, nightBrightness, cityLightStrength, () => selectedPoint.lat, () => selectedPoint.lng], () => {
-  if (!playing.value) updateEarthScene()
+  if (!playing.value && !suppressSceneUpdate) updateEarthScene()
 })
 
 // 静态图层需要重建 Mesh。播放演示时也要立即响应，
 // 否则赤道面、黄道面、地球五带、夹角标注等按钮只会改变状态，不会重新创建场景对象。
 watch(
   () => [
-    layers.grid,
+    layers.longitudeLines,
+    layers.latitudeLines,
+    layers.longitudeLabels,
+    layers.latitudeLabels,
     layers.equator,
     layers.ecliptic,
     layers.tiltAngle,
@@ -684,7 +757,7 @@ watch(
 // 动态图层本身由 updateAnimatedOrbitFrame 每帧更新；这里补一次，
 // 确保暂停状态下切换晨昏线、太阳光、直射点时也立刻同步。
 watch(
-  () => [layers.terminator, layers.sunRays, layers.subsolar],
+  () => [layers.terminator, layers.sunRays, layers.subsolar, layers.latitudeNightArc],
   () => {
     updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
   },
@@ -693,6 +766,13 @@ watch(
 watch(utcMinutes, value => {
   runtimeUtcMinutes = value
   updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+})
+
+watch(miniCameraVisible, () => {
+  nextTick(() => {
+    resizeMiniCameraRenderer(true)
+    lastMiniRenderTime = 0
+  })
 })
 
 onMounted(async () => {
@@ -732,12 +812,14 @@ function initEarthScene() {
 
   earthCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 100)
   earthCamera.position.set(5.9, 3.25, 6.3)
+  miniCamera = new THREE.PerspectiveCamera(42, 16 / 10, 0.05, 100)
 
   earthRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   earthRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6))
-  earthRenderer.setSize(earthRef.value.clientWidth, earthRef.value.clientHeight)
+  earthRenderer.setSize(earthRef.value.clientWidth, earthRef.value.clientHeight, false)
   earthRenderer.setClearColor(0x000000, 0)
   earthRef.value.appendChild(earthRenderer.domElement)
+  initMiniCameraRenderer()
 
   earthControls = new OrbitControls(earthCamera, earthRenderer.domElement)
   earthControls.enableDamping = true
@@ -800,9 +882,9 @@ function initEarthScene() {
   })
   earthRenderer.domElement.addEventListener('pointerup', pickEarthPoint)
 
-  earthResize = new ResizeObserver(resizeEarth)
+  earthResize = new ResizeObserver(resizeEarth as unknown as ResizeObserverCallback)
   earthResize.observe(earthRef.value)
-  resizeEarth()
+  resizeEarth(true)
   setCamera('overview')
 }
 
@@ -850,7 +932,8 @@ function updateEarthScene() {
 
   const localSun = earthToSunWorld.clone().applyQuaternion(spinGroup.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize()
 
-  if (layers.grid) globeLayer.add(createLatLngGrid())
+  // 经纬线默认展示；经度线 / 纬度线 / 经度标注 / 纬度标注可分别控制。
+  if (layers.longitudeLines || layers.latitudeLines || layers.longitudeLabels || layers.latitudeLabels) globeLayer.add(createLatLngGrid())
   if (layers.equator) globeLayer.add(createEquatorPlane())
   if (layers.zones) globeLayer.add(createHeatZones())
   if (layers.rotationDirection) globeLayer.add(createRotationDirectionArrows())
@@ -989,10 +1072,10 @@ function setLinePoints(lineObj: THREE.Line, start: THREE.Vector3, end: THREE.Vec
   ;(lineObj.geometry as THREE.BufferGeometry).computeBoundingSphere()
 }
 
-function setArrowBetween(arrow: THREE.Mesh, start: THREE.Vector3, end: THREE.Vector3) {
+function setArrowBetween(arrow: THREE.Mesh, start: THREE.Vector3, end: THREE.Vector3, tipOffset = 0.07) {
   const direction = end.clone().sub(start).normalize()
   arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction))
-  arrow.position.copy(end.clone().sub(direction.clone().multiplyScalar(0.07)))
+  arrow.position.copy(end.clone().sub(direction.clone().multiplyScalar(tipOffset)))
 }
 
 function updateDynamicSunRays(earthPos: THREE.Vector3) {
@@ -1097,6 +1180,58 @@ function updateDynamicTerminator(earthPos: THREE.Vector3, earthToSunWorld: THREE
   setTerminatorLinePoints(dynamicDuskLine, duskPoints)
 }
 
+function updateLatitudeLineLighting(earthToSunWorld: THREE.Vector3) {
+  if (!latitudeLightMaterials.length) return
+
+  latitudeLightMaterials.forEach(material => {
+    material.uniforms.sunDir!.value.copy(earthToSunWorld)
+    material.uniforms.nightArcEnabled!.value = layers.latitudeNightArc ? 1 : 0
+  })
+}
+
+function createLightAwareLatitudeLine(points: THREE.Vector3[], options: { isEquator?: boolean } = {}) {
+  const isEquator = !!options.isEquator
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      sunDir: { value: new THREE.Vector3(-1, 0, 0) },
+      dayColor: { value: new THREE.Color(isEquator ? 0x9af5ff : 0x7dd3fc) },
+      nightColor: { value: new THREE.Color(isEquator ? 0xf0abfc : 0xd946ef) },
+      nightArcEnabled: { value: layers.latitudeNightArc ? 1 : 0 },
+      dayOpacity: { value: isEquator ? 0.64 : 0.3 },
+      nightOpacity: { value: isEquator ? 0.9 : 0.78 },
+    },
+    vertexShader: `
+      uniform vec3 sunDir;
+      varying float vLight;
+      void main() {
+        vec3 worldNormal = normalize(mat3(modelMatrix) * position);
+        vLight = dot(worldNormal, normalize(sunDir));
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 dayColor;
+      uniform vec3 nightColor;
+      uniform float nightArcEnabled;
+      uniform float dayOpacity;
+      uniform float nightOpacity;
+      varying float vLight;
+      void main() {
+        float nightMix = (1.0 - smoothstep(-0.08, 0.12, vLight)) * nightArcEnabled;
+        vec3 color = mix(dayColor, nightColor, nightMix);
+        float alpha = mix(dayOpacity, nightOpacity, nightMix);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  })
+
+  latitudeLightMaterials.push(material)
+  return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material)
+}
+
 function updateDynamicSubsolar(earthPos: THREE.Vector3, earthToSunWorld: THREE.Vector3) {
   if (
     !dynamicSubsolarGroup ||
@@ -1161,6 +1296,7 @@ function updateAnimatedOrbitFrame(day: number, utc = runtimeUtcMinutes) {
   earthMaterial.uniforms.cityLightStrength!.value = cityLightStrength.value
 
   updateDynamicTerminator(earthPos, earthToSunWorld)
+  updateLatitudeLineLighting(earthToSunWorld)
   updateDynamicSunRays(earthPos)
   updateDynamicSubsolar(earthPos, earthToSunWorld)
 
@@ -1384,10 +1520,10 @@ function createSubsolarRay(subsolarWorld: THREE.Vector3) {
   return group
 }
 
-function createRayArrow(start: THREE.Vector3, end: THREE.Vector3, color: number, opacity = 0.7) {
+function createRayArrow(start: THREE.Vector3, end: THREE.Vector3, color: number, opacity = 0.7, radius = 0.045, height = 0.14, tipOffset = 0.07) {
   const direction = end.clone().sub(start).normalize()
   const arrow = new THREE.Mesh(
-    new THREE.ConeGeometry(0.045, 0.14, 18),
+    new THREE.ConeGeometry(radius, height, 18),
     new THREE.MeshBasicMaterial({
       color,
       transparent: true,
@@ -1396,7 +1532,7 @@ function createRayArrow(start: THREE.Vector3, end: THREE.Vector3, color: number,
     }),
   )
   arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction))
-  arrow.position.copy(end.clone().sub(direction.clone().multiplyScalar(0.07)))
+  arrow.position.copy(end.clone().sub(direction.clone().multiplyScalar(tipOffset)))
   return arrow
 }
 
@@ -1517,13 +1653,13 @@ function createRotationDirectionArrows() {
     const theta = lng * DEG
     const pos = latLngToVector(0, lng, EARTH_R * 1.128)
     const tangent = new THREE.Vector3(-Math.sin(theta), 0, -Math.cos(theta)).normalize()
-    const start = pos.clone().sub(tangent.clone().multiplyScalar(0.048))
-    const end = pos.clone().add(tangent.clone().multiplyScalar(0.12))
-    group.add(lineNoDepth([start, end], 0x2ec4b6, 0.7))
-    group.add(createRayArrow(start, end, 0x2ec4b6, 0.92))
+    const start = pos.clone().sub(tangent.clone().multiplyScalar(0.032))
+    const end = pos.clone().add(tangent.clone().multiplyScalar(0.078))
+    group.add(lineNoDepth([start, end], 0x2ec4b6, 0.62))
+    group.add(createRayArrow(start, end, 0x2ec4b6, 0.86, 0.022, 0.07, 0.034))
 
     if (index === 1) {
-      group.add(alwaysLabelSprite('自西向东自转', '#6fffe9', 0.078, latLngToVector(12, lng, EARTH_R * 1.22)))
+      group.add(alwaysLabelSprite('自西向东自转', '#6fffe9', 0.064, latLngToVector(10, lng, EARTH_R * 1.18)))
     }
   })
 
@@ -1724,19 +1860,68 @@ function createObliquityAngleMarker() {
 
 function createLatLngGrid() {
   const group = new THREE.Group()
-  for (let lat = -60; lat <= 60; lat += 30) {
-    const points: THREE.Vector3[] = []
-    for (let lng = -180; lng <= 180; lng += 4) points.push(latLngToVector(lat, lng, EARTH_R * 1.022))
-    group.add(line(points, lat === 0 ? 0x9af5ff : 0x7dd3fc, lat === 0 ? 0.58 : 0.26))
+  const radius = EARTH_R * 1.024
+
+  latitudeLightMaterials = []
+
+  const addGridLabel = (text: string, position: THREE.Vector3, color = '#9af5ff') => {
+    const sprite = alwaysLabelSprite(text, color, 0.046, position)
+    sprite.renderOrder = 18
+    const material = sprite.material as THREE.SpriteMaterial
+    material.depthTest = true
+    material.depthWrite = false
+    return sprite
   }
 
-  for (let lng = -150; lng <= 180; lng += 30) {
-    const points: THREE.Vector3[] = []
-    for (let lat = -88; lat <= 88; lat += 4) points.push(latLngToVector(lat, lng, EARTH_R * 1.023))
-    group.add(line(points, lng === 0 ? 0x9af5ff : 0x7dd3fc, lng === 0 ? 0.46 : 0.22))
+  // 纬线默认展示；纬度线、纬度文字、夜弧效果可以分别控制。
+  for (let lat = -75; lat <= 75; lat += 15) {
+    const isEquator = lat === 0
+
+    if (layers.latitudeLines) {
+      const points: THREE.Vector3[] = []
+      for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, radius))
+      const lineObj = createLightAwareLatitudeLine(points, { isEquator })
+      lineObj.renderOrder = 12
+      group.add(lineObj)
+    }
+
+    if (layers.latitudeLabels) {
+      const labelPos = latLngToVector(lat, 0, EARTH_R * 1.108)
+      group.add(addGridLabel(formatGridLat(lat), labelPos, isEquator ? '#ffd166' : '#9af5ff'))
+    }
+  }
+
+  // 经线默认展示；经度线和经度文字可以分别控制。
+  for (let lng = -180; lng < 180; lng += 15) {
+    const isPrime = lng === 0
+
+    if (layers.longitudeLines) {
+      const points: THREE.Vector3[] = []
+      for (let lat = -88; lat <= 88; lat += 3) points.push(latLngToVector(lat, lng, radius))
+      const lineObj = line(points, isPrime ? 0x9af5ff : 0x7dd3fc, isPrime ? 0.5 : 0.22)
+      lineObj.renderOrder = 11
+      group.add(lineObj)
+    }
+
+    if (layers.longitudeLabels) {
+      const labelPos = latLngToVector(0, lng, EARTH_R * 1.115)
+      group.add(addGridLabel(formatGridLng(lng), labelPos, isPrime ? '#ffd166' : '#9af5ff'))
+    }
   }
 
   return group
+}
+
+function formatGridLat(lat: number) {
+  if (lat === 0) return '0°'
+  return `${Math.abs(lat)}°${lat > 0 ? 'N' : 'S'}`
+}
+
+function formatGridLng(lng: number) {
+  const value = normalizeLng(lng)
+  if (Math.abs(value) < 0.01) return '0°'
+  if (Math.abs(value) === 180) return '180°'
+  return `${Math.abs(value)}°${value > 0 ? 'E' : 'W'}`
 }
 
 function createTerminator(localSun: THREE.Vector3) {
@@ -1838,36 +2023,80 @@ function pickEarthPoint(event: PointerEvent) {
   updateEarthScene()
 }
 
-function setCamera(mode: CameraMode) {
+function easeInOutCubic(t: number) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+
+function cancelCameraTween() {
+  cameraTweenToken += 1
+}
+
+function animateCameraTo(targetPosition: THREE.Vector3, targetLookAt: THREE.Vector3, duration = 760) {
   if (!earthCamera || !earthControls) return
 
+  const token = ++cameraTweenToken
+  const startTime = performance.now()
+  const startPos = earthCamera.position.clone()
+  const startTarget = earthControls.target.clone()
+
+  const tick = () => {
+    if (token !== cameraTweenToken || !earthCamera || !earthControls) return
+
+    const t = clamp((performance.now() - startTime) / duration, 0, 1)
+    const k = easeInOutCubic(t)
+
+    earthCamera.position.lerpVectors(startPos, targetPosition, k)
+    earthControls.target.lerpVectors(startTarget, targetLookAt, k)
+    earthControls.update()
+
+    if (t < 1) requestAnimationFrame(tick)
+  }
+
+  tick()
+}
+
+function getCameraPose(mode: CameraMode) {
   if (mode === 'overview') {
-    focusCenter.value = 'sun'
-    earthControls.target.set(0, 0, 0)
-    earthCamera.position.set(5.9, 3.25, 6.3)
+    const target = new THREE.Vector3(0, 0, 0)
+    return {
+      focus: 'sun' as FocusCenter,
+      target,
+      position: new THREE.Vector3(5.9, 3.25, 6.3),
+    }
   }
 
   if (mode === 'north') {
-    focusCenter.value = 'earth'
     const target = getEarthWorldPosition()
-    earthControls.target.copy(target)
-    earthCamera.position.copy(target.clone().add(new THREE.Vector3(0, 3.6, 0.01)))
+    return {
+      focus: 'earth' as FocusCenter,
+      target,
+      position: target.clone().add(new THREE.Vector3(0, 3.6, 0.01)),
+    }
   }
 
   if (mode === 'ecliptic') {
-    focusCenter.value = 'sun'
-    earthControls.target.set(0, 0, 0)
-    earthCamera.position.set(5.7, 0.62, 6.1)
+    const target = new THREE.Vector3(0, 0, 0)
+    return {
+      focus: 'sun' as FocusCenter,
+      target,
+      position: new THREE.Vector3(5.7, 0.62, 6.1),
+    }
   }
 
-  if (mode === 'point') {
-    focusCenter.value = 'earth'
-    const target = getEarthWorldPosition()
-    earthControls.target.copy(target)
-    earthCamera.position.copy(target.clone().add(new THREE.Vector3(1.7, 1.02, 2.0)))
+  const target = getEarthWorldPosition()
+  return {
+    focus: 'earth' as FocusCenter,
+    target,
+    position: target.clone().add(new THREE.Vector3(1.7, 1.02, 2.0)),
   }
+}
 
-  earthControls.update()
+function setCamera(mode: CameraMode) {
+  if (!earthCamera || !earthControls) return
+
+  const pose = getCameraPose(mode)
+  focusCenter.value = pose.focus
+  animateCameraTo(pose.position, pose.target)
 }
 
 function setFocusCenter(center: FocusCenter) {
@@ -1879,18 +2108,69 @@ function updateControlsTarget(jump = false) {
   if (!earthControls || !earthCamera) return
 
   const target = focusCenter.value === 'sun' ? new THREE.Vector3(0, 0, 0) : getEarthWorldPosition()
-  earthControls.target.copy(target)
 
   if (jump) {
     const offset = focusCenter.value === 'sun' ? new THREE.Vector3(5.9, 3.25, 6.3) : new THREE.Vector3(1.7, 1.02, 2.0)
-    earthCamera.position.copy(target.clone().add(offset))
+    animateCameraTo(target.clone().add(offset), target)
+    return
   }
 
+  earthControls.target.copy(target)
   earthControls.update()
 }
 
-function getEarthWorldPosition() {
-  return new THREE.Vector3(Math.cos(orbitAngle.value) * ORBIT_R, 0, Math.sin(orbitAngle.value) * ORBIT_R)
+function getEarthWorldPosition(day = visualOrbitDay()) {
+  const theta = orbitThetaByDay(day)
+  return new THREE.Vector3(Math.cos(theta) * ORBIT_R, 0, Math.sin(theta) * ORBIT_R)
+}
+
+function normalizeVisualDay(day: number) {
+  let result = day
+  while (result < 1) result += 365
+  while (result > 366) result -= 365
+  return result
+}
+
+function nearestVisualDayTarget(fromDay: number, targetDay: number) {
+  let target = targetDay + runtimeUtcMinutes / 1440
+  while (target - fromDay > 182.5) target -= 365
+  while (target - fromDay < -182.5) target += 365
+  return target
+}
+
+function animateOrbitToDay(targetDay: number, onComplete?: () => void) {
+  const token = ++orbitTweenToken
+  const startTime = performance.now()
+  const startDay = tweenOrbitVisualDay ?? visualOrbitDay()
+  const endDay = nearestVisualDayTarget(startDay, targetDay)
+  const duration = 1150
+  let lastEarthPos = getEarthWorldPosition(startDay)
+
+  const tick = () => {
+    if (token !== orbitTweenToken) return
+
+    const t = clamp((performance.now() - startTime) / duration, 0, 1)
+    const k = easeInOutCubic(t)
+    tweenOrbitVisualDay = normalizeVisualDay(startDay + (endDay - startDay) * k)
+
+    if (focusCenter.value === 'earth' && earthControls && earthCamera) {
+      const currentEarthPos = getEarthWorldPosition(tweenOrbitVisualDay)
+      const delta = currentEarthPos.clone().sub(lastEarthPos)
+      earthCamera.position.add(delta)
+      earthControls.target.copy(currentEarthPos)
+      earthControls.update()
+      lastEarthPos = currentEarthPos
+    }
+
+    if (t < 1) {
+      requestAnimationFrame(tick)
+    } else {
+      tweenOrbitVisualDay = null
+      onComplete?.()
+    }
+  }
+
+  tick()
 }
 
 function animate(now: number) {
@@ -1915,12 +2195,136 @@ function animate(now: number) {
 
     updateAnimatedOrbitFrame(autoOrbitDay + runtimeUtcMinutes / 1440, runtimeUtcMinutes)
   } else {
-    updateAnimatedOrbitFrame(dayNo.value + runtimeUtcMinutes / 1440, runtimeUtcMinutes)
+    updateAnimatedOrbitFrame(tweenOrbitVisualDay ?? dayNo.value + runtimeUtcMinutes / 1440, runtimeUtcMinutes)
   }
 
   earthControls?.update()
-  earthRenderer?.render(earthScene!, earthCamera!)
+  renderEarthFrame(now)
   raf = requestAnimationFrame(animate)
+}
+
+function initMiniCameraRenderer() {
+  if (!miniCameraCanvasRef.value || miniRenderer) return
+
+  miniRenderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    powerPreference: 'high-performance',
+  })
+  miniRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35))
+  miniRenderer.setClearColor(0x041322, 1)
+  miniRenderer.domElement.className = 'mini-camera-canvas'
+  miniCameraCanvasRef.value.appendChild(miniRenderer.domElement)
+
+  miniResizeObserver = new ResizeObserver(() => resizeMiniCameraRenderer())
+  miniResizeObserver.observe(miniCameraCanvasRef.value)
+  resizeMiniCameraRenderer(true)
+}
+
+function resizeMiniCameraRenderer(immediate = false) {
+  miniRendererResizeDirty = true
+  if (immediate) syncMiniRendererSize()
+}
+
+function syncMiniRendererSize() {
+  if (!miniRenderer || !miniCameraCanvasRef.value || !miniCamera) return
+
+  const width = Math.max(1, Math.floor(miniCameraCanvasRef.value.clientWidth))
+  const height = Math.max(1, Math.floor(miniCameraCanvasRef.value.clientHeight))
+
+  if (!miniRendererResizeDirty && width === lastMiniCssWidth && height === lastMiniCssHeight) return
+
+  miniRendererResizeDirty = false
+  lastMiniCssWidth = width
+  lastMiniCssHeight = height
+
+  miniRenderer.setSize(width, height, false)
+  miniCamera.aspect = width / Math.max(1, height)
+  miniCamera.updateProjectionMatrix()
+}
+
+function renderEarthFrame(now = performance.now()) {
+  if (!earthRenderer || !earthScene || !earthCamera) return
+
+  syncEarthRendererSize()
+
+  earthRenderer.getSize(rendererSize)
+  const width = rendererSize.x
+  const height = rendererSize.y
+
+  earthRenderer.autoClear = true
+  earthRenderer.setScissorTest(false)
+  earthRenderer.setViewport(0, 0, width, height)
+  earthRenderer.setClearColor(0x000000, 0)
+  earthRenderer.render(earthScene, earthCamera)
+
+  renderMiniCameraFrame(now)
+}
+
+function renderMiniCameraFrame(now = performance.now()) {
+  if (!miniCameraVisible.value || !miniRenderer || !earthScene || !miniCamera) return
+
+  // 副相机跟随主循环渲染，尺寸变化在当前 RAF 内提交，避免 resize 黑闪。
+  lastMiniRenderTime = now
+  syncMiniRendererSize()
+  syncMiniCamera()
+  miniRenderer.clear(true, true, true)
+  miniRenderer.render(earthScene, miniCamera)
+}
+
+function syncMiniCamera(immediate = false) {
+  if (!miniCamera || !earthSystem) return
+
+  earthSystem.getWorldPosition(miniEarthPos)
+  miniSunPos.set(0, 0, 0)
+
+  const axisSource = tiltGroup || earthSystem
+  axisSource.getWorldQuaternion(miniQuat)
+  miniAxisDir.set(0, 1, 0).applyQuaternion(miniQuat).normalize()
+
+  // 从地球指向太阳；前方相机放在太阳侧，看到受光半球。
+  miniSunDir.copy(miniSunPos).sub(miniEarthPos).normalize()
+  const distance = EARTH_R * 3.35
+
+  switch (miniCameraMode.value) {
+    case 'front':
+      miniViewDir.copy(miniSunDir)
+      break
+    case 'back':
+      miniViewDir.copy(miniSunDir).multiplyScalar(-1)
+      break
+    case 'left':
+      miniViewDir.copy(miniSunDir).cross(miniAxisDir).normalize()
+      break
+    case 'right':
+      miniViewDir.copy(miniAxisDir).cross(miniSunDir).normalize()
+      break
+    case 'top':
+      miniViewDir.copy(miniAxisDir)
+      break
+    case 'bottom':
+      miniViewDir.copy(miniAxisDir).multiplyScalar(-1)
+      break
+  }
+
+  if (miniViewDir.lengthSq() < 0.0001) miniViewDir.set(0, 0, 1)
+  miniTargetPos.copy(miniEarthPos).addScaledVector(miniViewDir.normalize(), distance)
+
+  if (miniCameraMode.value === 'top' || miniCameraMode.value === 'bottom') {
+    miniCameraUp.copy(miniSunDir).projectOnPlane(miniAxisDir).normalize()
+    if (miniCameraUp.lengthSq() < 0.0001) miniCameraUp.set(1, 0, 0)
+    miniCamera.up.copy(miniCameraUp)
+  } else {
+    miniTargetPos.addScaledVector(miniAxisDir, EARTH_R * 0.36)
+    miniCamera.up.copy(miniAxisDir)
+  }
+
+  if (immediate || miniCamera.position.lengthSq() < 0.0001) {
+    miniCamera.position.copy(miniTargetPos)
+  } else {
+    miniCamera.position.lerp(miniTargetPos, 0.28)
+  }
+  miniCamera.lookAt(miniEarthPos)
 }
 
 function termDay(term: Term) {
@@ -1963,25 +2367,42 @@ function applyLessonPreset(key: LessonPresetKey) {
   }
 
   const preset = presetMap[key]
+  const targetDay = dayOfYear(new Date(`${preset.date}T00:00:00Z`))
+
   playing.value = false
-  dateValue.value = preset.date
-  autoOrbitDay = dayOfYear(new Date(`${preset.date}T00:00:00Z`))
+  suppressSceneUpdate = true
+
   cityKey.value = preset.cityKey
   selectedPoint.name = preset.name
   selectedPoint.lat = preset.lat
   selectedPoint.lng = preset.lng
   localSolarMinutes.value = preset.solarHour * 60
   runtimeUtcMinutes = utcMinutes.value
-  updateEarthScene()
+
+  animateOrbitToDay(targetDay, () => {
+    dateValue.value = preset.date
+    autoOrbitDay = targetDay
+    // 日期落定后再按目标日期校准地方太阳时，避免时差方程仍按旧日期计算。
+    localSolarMinutes.value = preset.solarHour * 60
+    runtimeUtcMinutes = utcMinutes.value
+    suppressSceneUpdate = false
+    updateEarthScene()
+    updateControlsTarget(true)
+  })
 }
 
 function setTerm(term: Term) {
-  dateValue.value = term.date
-  autoOrbitDay = dayOfYear(new Date(`${term.date}T00:00:00Z`))
-  // 手动选择节气，回到当天 0 点。
-  localSolarMinutes.value = 0
-  runtimeUtcMinutes = utcMinutes.value
-  updateEarthScene()
+  const targetDay = dayOfYear(new Date(`${term.date}T00:00:00Z`))
+  playing.value = false
+  suppressSceneUpdate = true
+
+  animateOrbitToDay(targetDay, () => {
+    dateValue.value = term.date
+    autoOrbitDay = targetDay
+    runtimeUtcMinutes = utcMinutes.value
+    suppressSceneUpdate = false
+    updateEarthScene()
+  })
 }
 
 function setDateByDay(day: number, syncAuto = true) {
@@ -2058,13 +2479,34 @@ function resetAll() {
   setCamera('overview')
 }
 
-function resizeEarth() {
+function resizeEarth(immediate = false) {
+  earthRendererResizeDirty = true
+  miniRendererResizeDirty = true
+
+  // ResizeObserver 只标记尺寸脏，不直接 setSize。
+  // 真正的 WebGL drawingBuffer resize 放到 render loop 的同一帧里完成，
+  // 避免窗口拖动时反复清空主画布造成闪烁。
+  if (immediate) {
+    syncEarthRendererSize()
+    syncMiniRendererSize()
+  }
+}
+
+function syncEarthRendererSize() {
   if (!earthRef.value || !earthRenderer || !earthCamera) return
-  const w = earthRef.value.clientWidth
-  const h = earthRef.value.clientHeight
-  earthCamera.aspect = w / Math.max(1, h)
+
+  const width = Math.max(1, Math.floor(earthRef.value.clientWidth))
+  const height = Math.max(1, Math.floor(earthRef.value.clientHeight))
+
+  if (!earthRendererResizeDirty && width === lastEarthCssWidth && height === lastEarthCssHeight) return
+
+  earthRendererResizeDirty = false
+  lastEarthCssWidth = width
+  lastEarthCssHeight = height
+
+  earthRenderer.setSize(width, height, false)
+  earthCamera.aspect = width / Math.max(1, height)
   earthCamera.updateProjectionMatrix()
-  earthRenderer.setSize(w, h)
 }
 
 function disposeEarthScene() {
@@ -2072,9 +2514,15 @@ function disposeEarthScene() {
   earthResize = null
   earthControls?.dispose()
   earthControls = null
+  miniResizeObserver?.disconnect()
+  miniResizeObserver = null
+  if (miniRenderer?.domElement?.parentNode) miniRenderer.domElement.parentNode.removeChild(miniRenderer.domElement)
+  miniRenderer?.dispose()
+  miniRenderer = null
   if (earthRenderer?.domElement?.parentNode) earthRenderer.domElement.parentNode.removeChild(earthRenderer.domElement)
   earthRenderer?.dispose()
   earthRenderer = null
+  miniCamera = null
   earthScene = null
 }
 
@@ -2126,8 +2574,8 @@ function createStarField() {
     return new THREE.Points(geo, mat)
   }
 
-  group.add(makeStars(1800, 10, 24, 0.03, 0.98))
-  group.add(makeStars(280, 8, 18, 0.06, 1.0))
+  group.add(makeStars(1800, 18, 44, 0.038, 0.92))
+  group.add(makeStars(280, 22, 52, 0.072, 0.96))
 
   const nebula = new THREE.Sprite(
     new THREE.SpriteMaterial({
@@ -2139,8 +2587,8 @@ function createStarField() {
       blending: THREE.AdditiveBlending,
     }),
   )
-  nebula.position.set(-5.2, 2.4, -7.5)
-  nebula.scale.set(8.5, 4.8, 1)
+  nebula.position.set(-13.5, 6.2, -24)
+  nebula.scale.set(14.5, 8.2, 1)
   group.add(nebula)
 
   const goldNebula = new THREE.Sprite(
@@ -2153,8 +2601,8 @@ function createStarField() {
       blending: THREE.AdditiveBlending,
     }),
   )
-  goldNebula.position.set(5.4, -1.2, -8.5)
-  goldNebula.scale.set(6.2, 3.8, 1)
+  goldNebula.position.set(15.2, -4.2, -27)
+  goldNebula.scale.set(11.5, 7.2, 1)
   group.add(goldNebula)
 
   return group
@@ -2889,6 +3337,12 @@ function clamp(value: number, min: number, max: number) {
   min-height: 0;
 }
 
+.canvas-host canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
 .floating-card {
   position: absolute;
   z-index: 5;
@@ -2904,7 +3358,7 @@ function clamp(value: number, min: number, max: number) {
 .observer-card {
   left: 14px;
   top: 14px;
-  width: 330px;
+  width: 348px;
 }
 
 .tip-card {
@@ -2968,6 +3422,77 @@ function clamp(value: number, min: number, max: number) {
   right: 14px;
   bottom: 14px;
   width: 302px;
+}
+
+.observer-subsolar-chart {
+  margin-top: 9px;
+  border-radius: 12px;
+  background: rgba(17, 39, 65, 0.52);
+  border: 1px solid rgba(117, 219, 255, 0.14);
+  padding: 8px;
+}
+
+.mini-camera-ui {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: clamp(260px, 30%, 390px);
+  aspect-ratio: 16 / 9.9;
+  z-index: 6;
+  border-radius: 16px;
+  overflow: hidden;
+  background: transparent;
+  border: 1px solid rgba(46, 196, 182, 0.72);
+  transform: translateZ(0);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.mini-camera-canvas-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.mini-camera-canvas-host canvas,
+.mini-camera-canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.mini-camera-select-row {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 108px;
+  display: flex;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.mini-camera-select {
+  width: 100%;
+}
+
+.mini-camera-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  border-radius: 999px;
+  background: rgba(5, 25, 45, 0.82);
+  box-shadow: 0 0 0 1px rgba(120, 220, 255, 0.36) inset;
+}
+
+.mini-camera-select :deep(.el-select__selected-item),
+.mini-camera-select :deep(.el-select__placeholder) {
+  color: rgba(230, 250, 255, 0.96);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .subsolar-chart {
@@ -3315,6 +3840,10 @@ function clamp(value: number, min: number, max: number) {
   .formula-card,
   .subsolar-chart-card {
     display: none;
+  }
+
+  .mini-camera-ui {
+    width: 300px;
   }
 }
 
