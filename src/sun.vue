@@ -37,8 +37,8 @@
 </template>
 
 <script setup lang="ts">
-/** SUN_APP_MOTION_CORE_V13: 修复太阳高度角白色地平基准线与黄色直射光线同点对接。 */
-/** SUN_APP_MOTION_CORE_V10: 从用户提供的 App.vue 核心太阳视运动逻辑拆出的独立组件。父组件请 import ./SunAppMotionCore_v10.vue */
+/** SUN_LITE_PARENT_DRIVEN_V14: 当前太阳位置、赤纬、太阳时由父组件统一传入；本组件只负责渲染。 */
+/** 基于 SUN_APP_MOTION_CORE_V13：保留城市观察场景、太阳路径、阴影、光线和高度角演示。 */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -101,6 +101,8 @@ const SKY_RADIUS = 7.6
 const GROUND_RADIUS = 7.4
 const GROUND_SURFACE_Y = 0.08
 const OBSERVER_POINT = new THREE.Vector3(-0.02, 0.08, -0.98)
+// 极昼/极夜临界点容差，与父组件保持一致，避免北极圈临界值被浮点误差误判。
+const POLAR_EPS = 0.0015
 
 const BILLBOARD_BACK_CONFIG = {
   eyebrow: '敲代码做 HTML 互动课件',
@@ -111,8 +113,12 @@ const BILLBOARD_BACK_CONFIG = {
 
 const state = reactive({
   latitude: props.latitude,
+  longitude: props.longitude,
   dayOfYear: props.dayOfYear,
   solarTime: props.solarTime / 60,
+  declination: props.declination,
+  altitude: props.altitude,
+  azimuth: props.azimuth,
 })
 
 const layers = reactive({
@@ -157,7 +163,7 @@ const cityRoadMaterials: THREE.MeshStandardMaterial[] = []
 let lastPathKey = ''
 let lastCityKey = ''
 
-const runtimeMetrics = computed(() => computeSolarMetrics(state.latitude, state.dayOfYear, state.solarTime))
+const runtimeMetrics = computed(() => buildRuntimeMetricsFromProps())
 
 const sceneTitle = computed(() => {
   if (state.dayOfYear >= 160 && state.dayOfYear <= 185) return '6月夏至前后 · 北半球路径高、昼长较长'
@@ -166,14 +172,31 @@ const sceneTitle = computed(() => {
   return '太阳周日视运动 · 路径随日期变化'
 })
 
-const sceneSubtitle = computed(() => `纬度 ${formatDeg(state.latitude)} · 第 ${state.dayOfYear} 天 · 地方太阳时 ${formatClock(state.solarTime)}`)
+const sceneSubtitle = computed(
+  () => `纬度 ${formatDeg(state.latitude)} · 经度 ${formatDeg(state.longitude)} · 第 ${state.dayOfYear} 天 · 地方太阳时 ${formatClock(state.solarTime)}`,
+)
 
 watch(
-  () => [props.latitude, props.dayOfYear, props.solarTime, props.altitude, props.azimuth],
+  () => [
+    props.latitude,
+    props.longitude,
+    props.dayOfYear,
+    props.solarTime,
+    props.declination,
+    props.altitude,
+    props.azimuth,
+    props.sunriseText,
+    props.sunsetText,
+    props.dayLengthText,
+  ],
   () => {
     state.latitude = props.latitude
+    state.longitude = props.longitude
     state.dayOfYear = props.dayOfYear
     state.solarTime = props.solarTime / 60
+    state.declination = props.declination
+    state.altitude = props.altitude
+    state.azimuth = props.azimuth
     syncFromProps()
   },
 )
@@ -261,11 +284,14 @@ function initScene() {
 
 function syncFromProps() {
   if (!scene) return
-  const pathKey = `${Math.round(state.latitude * 10)}-${state.dayOfYear}`
+
+  // 当前太阳路径由父组件传入的 declination 驱动，避免父子组件各算一套赤纬导致不一致。
+  const pathKey = [Math.round(state.latitude * 10), state.dayOfYear, state.declination.toFixed(2)].join('-')
   if (pathKey !== lastPathKey) {
     lastPathKey = pathKey
     rebuildSolarPaths()
   }
+
   updateSceneBySolar(runtimeMetrics.value)
 }
 
@@ -846,14 +872,14 @@ function rebuildSolarPaths() {
   if (!layers.paths) return
 
   const pathDefs = [
-    { day: state.dayOfYear, name: `${state.dayOfYear}路径`, color: 0xffd166, opacity: 1, radius: 0.018 },
-    { day: 172, name: '夏至路径', color: 0x3687ff, opacity: 0.78, radius: 0.011 },
-    { day: 80, name: '春秋分路径', color: 0xffffff, opacity: 0.62, radius: 0.01 },
-    { day: 355, name: '冬至路径', color: 0x45e8ff, opacity: 0.76, radius: 0.011 },
+    { declination: state.declination, name: `${state.dayOfYear}路径`, color: 0xffd166, opacity: 1, radius: 0.018 },
+    { declination: 23.44, name: '夏至路径', color: 0x3687ff, opacity: 0.78, radius: 0.011 },
+    { declination: 0, name: '春秋分路径', color: 0xffffff, opacity: 0.62, radius: 0.01 },
+    { declination: -23.44, name: '冬至路径', color: 0x45e8ff, opacity: 0.76, radius: 0.011 },
   ]
 
   pathDefs.forEach((def, index) => {
-    const points = buildSunPathPoints(state.latitude, def.day)
+    const points = buildSunPathPoints(state.latitude, def.declination)
     if (points.length < 2) return
     pathGroup.add(makeTubeLine(points, def.color, def.radius, def.opacity))
 
@@ -872,7 +898,7 @@ function rebuildSolarPaths() {
     )
 
     if (index === 0) {
-      const currentPathMetrics = computeSolarMetrics(state.latitude, def.day, 12)
+      const currentPathMetrics = computeSolarMetricsByDeclination(state.latitude, def.declination, 12)
       if (!currentPathMetrics.polarType) {
         const first = points[0]!
         const last = points[points.length - 1]!
@@ -883,8 +909,8 @@ function rebuildSolarPaths() {
   })
 }
 
-function buildSunPathPoints(latitude: number, dayOfYear: number) {
-  const m = computeSolarMetrics(latitude, dayOfYear, 12)
+function buildSunPathPoints(latitude: number, declination: number) {
+  const m = computeSolarMetricsByDeclination(latitude, declination, 12)
   const points: THREE.Vector3[] = []
   if (m.polarType === '极夜') return points
 
@@ -894,7 +920,7 @@ function buildSunPathPoints(latitude: number, dayOfYear: number) {
 
   for (let i = 0; i <= steps; i++) {
     const t = start + ((end - start) * i) / steps
-    const metrics = computeSolarMetrics(latitude, dayOfYear, t)
+    const metrics = computeSolarMetricsByDeclination(latitude, declination, t)
     if (metrics.altitude >= -0.1 || m.polarType === '极昼') points.push(solarToPosition(metrics, SKY_RADIUS))
   }
   return points
@@ -1108,11 +1134,24 @@ function updateCityTimeElements(nightK: number, dayK: number, metrics: SolarMetr
     item.green.opacity = phase === 2 ? 0.95 : 0.22
   })
 
-  const key = `${formatClock(metrics.solarTime)}-${Math.round(metrics.altitude)}-${Math.round(dayK * 10)}`
+  // 城市广告牌是 CanvasTexture，不会像模板文本一样自动更新。
+  // key 必须包含父组件传入的日出/日落文本；否则从普通昼夜切到极昼/极夜时，
+  // HUD 已经显示“极夜”，广告牌仍可能沿用上一帧内部格式化的 00:00:00。
+  const sunriseText = normalizeParentSunText(props.sunriseText, metrics)
+  const sunsetText = normalizeParentSunText(props.sunsetText, metrics)
+  const key = [
+    formatClock(metrics.solarTime),
+    Math.round(metrics.altitude),
+    Math.round(dayK * 10),
+    sunriseText,
+    sunsetText,
+    props.dayLengthText,
+  ].join('-')
+
   cityClockItems.forEach(item => {
     if (item.lastKey === key) return
     item.lastKey = key
-    drawCityClockTexture(item.ctx, item.texture, metrics)
+    drawCityClockTexture(item.ctx, item.texture, metrics, sunriseText, sunsetText)
   })
 
   cityRoadMaterials.forEach(material => {
@@ -1128,7 +1167,21 @@ function updateNightSkyDecorations(nightK: number) {
   })
 }
 
-function drawCityClockTexture(ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture, metrics: SolarMetrics) {
+function normalizeParentSunText(text: string, metrics: SolarMetrics) {
+  const safeText = String(text || '').trim()
+  if (safeText) return safeText
+  if (metrics.polarType === '极昼') return '极昼'
+  if (metrics.polarType === '极夜') return '极夜'
+  return '--:--'
+}
+
+function drawCityClockTexture(
+  ctx: CanvasRenderingContext2D,
+  texture: THREE.CanvasTexture,
+  metrics: SolarMetrics,
+  sunriseText = normalizeParentSunText(props.sunriseText, metrics),
+  sunsetText = normalizeParentSunText(props.sunsetText, metrics),
+) {
   ctx.clearRect(0, 0, 768, 256)
   const bg = ctx.createLinearGradient(0, 0, 768, 256)
   bg.addColorStop(0, '#0f172a')
@@ -1156,7 +1209,8 @@ function drawCityClockTexture(ctx: CanvasRenderingContext2D, texture: THREE.Canv
 
   ctx.fillStyle = 'rgba(255,255,255,0.58)'
   ctx.font = '600 18px Microsoft YaHei, Arial'
-  ctx.fillText(`日出 ${formatClock(metrics.sunrise)} · 日落 ${formatClock(metrics.sunset)}`, 384, 211)
+  // 日出 / 日落文本由父组件统一传入，极昼极夜时不会被内部时间格式化成 00:00 / 24:00。
+  ctx.fillText(`日出 ${sunriseText} · 日落 ${sunsetText}`, 384, 211)
 
   texture.needsUpdate = true
 }
@@ -1232,17 +1286,103 @@ function getSmoothSkyColors(altitude: number, solarTime: number) {
   }
 }
 
-function computeSolarMetrics(latitude: number, dayOfYear: number, solarTime: number): SolarMetrics {
-  const declination = 23.44 * Math.sin(degToRad((360 * (284 + dayOfYear)) / 365))
+function buildRuntimeMetricsFromProps(): SolarMetrics {
+  const latitude = props.latitude
+  const declination = props.declination
+  const altitude = props.altitude
+  const azimuth = normalize360(props.azimuth)
+  const solarTime = props.solarTime / 60
+
+  const altRad = degToRad(altitude)
+  const azRad = degToRad(azimuth)
+  const horizontal = Math.cos(altRad)
+
+  // 与本组件坐标系保持一致：z=北，x+ 为西，x- 为东。
+  // solarToPosition 会使用 x=-east，因此 east 为正时太阳显示在东方。
+  const east = Math.sin(azRad) * horizontal
+  const north = Math.cos(azRad) * horizontal
+  const up = Math.sin(altRad)
+
+  const hourAngle = 15 * (solarTime - 12)
+  const noonAltitude = 90 - Math.abs(latitude - declination)
+  const dayInfo = dayLengthInfoByDeclination(latitude, declination)
+
+  let polarType: SolarMetrics['polarType'] = ''
+  let sunrise = 12
+  let sunset = 12
+  let dayLength = 0
+
+  if (dayInfo.type === 'polar-day') {
+    polarType = '极昼'
+    sunrise = 0
+    sunset = 24
+    dayLength = 24
+  } else if (dayInfo.type === 'polar-night') {
+    polarType = '极夜'
+    sunrise = 12
+    sunset = 12
+    dayLength = 0
+  } else {
+    sunrise = 12 - dayInfo.dayLength / 2
+    sunset = 12 + dayInfo.dayLength / 2
+    dayLength = dayInfo.dayLength
+  }
+
+  return {
+    declination,
+    hourAngle,
+    altitude,
+    azimuth,
+    noonAltitude,
+    dayLength,
+    sunrise,
+    sunset,
+    polarType,
+    east,
+    north,
+    up,
+    solarTime,
+  }
+}
+
+function dayLengthInfoByDeclination(latitude: number, declination: number) {
+  const latRad = degToRad(latitude)
+  const decRad = degToRad(declination)
+  const cosH0 = -Math.tan(latRad) * Math.tan(decRad)
+
+  // 与父组件保持一致：极昼 / 极夜临界点加容差，避免北极圈临界值被误判。
+  if (cosH0 <= -1 + POLAR_EPS) {
+    return {
+      type: 'polar-day' as const,
+      h0: 180,
+      dayLength: 24,
+    }
+  }
+
+  if (cosH0 >= 1 - POLAR_EPS) {
+    return {
+      type: 'polar-night' as const,
+      h0: 0,
+      dayLength: 0,
+    }
+  }
+
+  const h0 = radToDeg(Math.acos(clamp(cosH0, -1, 1)))
+  return {
+    type: 'normal' as const,
+    h0,
+    dayLength: (2 * h0) / 15,
+  }
+}
+
+function computeSolarMetricsByDeclination(latitude: number, declination: number, solarTime: number): SolarMetrics {
   const hourAngle = 15 * (solarTime - 12)
 
   const latRad = degToRad(latitude)
   const decRad = degToRad(declination)
   const hourRad = degToRad(hourAngle)
 
-  // 与 App.vue 保持一致：
-  // 本地水平坐标系：z=北，x+ 为西，x- 为东。
-  // 早晨 hourAngle < 0 时，east 为正，solarToPosition 里 x=-east，所以太阳出现在东侧。
+  // 与父组件算法坐标约定保持一致：z=北，x+ 为西，x- 为东。
   const east = -Math.cos(decRad) * Math.sin(hourRad)
   const north = Math.cos(latRad) * Math.sin(decRad) - Math.sin(latRad) * Math.cos(decRad) * Math.cos(hourRad)
   const up = Math.sin(latRad) * Math.sin(decRad) + Math.cos(latRad) * Math.cos(decRad) * Math.cos(hourRad)
@@ -1250,28 +1390,27 @@ function computeSolarMetrics(latitude: number, dayOfYear: number, solarTime: num
   const altitude = radToDeg(Math.asin(clamp(up, -1, 1)))
   const azimuth = normalize360(radToDeg(Math.atan2(east, north)))
   const noonAltitude = 90 - Math.abs(latitude - declination)
+  const dayInfo = dayLengthInfoByDeclination(latitude, declination)
 
-  const cosH0 = -Math.tan(latRad) * Math.tan(decRad)
-  let dayLength = 0
-  let sunrise = 0
-  let sunset = 0
   let polarType: SolarMetrics['polarType'] = ''
+  let sunrise = 12
+  let sunset = 12
+  let dayLength = 0
 
-  if (cosH0 <= -1) {
+  if (dayInfo.type === 'polar-day') {
     polarType = '极昼'
-    dayLength = 24
     sunrise = 0
     sunset = 24
-  } else if (cosH0 >= 1) {
+    dayLength = 24
+  } else if (dayInfo.type === 'polar-night') {
     polarType = '极夜'
-    dayLength = 0
     sunrise = 12
     sunset = 12
+    dayLength = 0
   } else {
-    const h0 = radToDeg(Math.acos(cosH0))
-    dayLength = (2 * h0) / 15
-    sunrise = 12 - dayLength / 2
-    sunset = 12 + dayLength / 2
+    sunrise = 12 - dayInfo.dayLength / 2
+    sunset = 12 + dayInfo.dayLength / 2
+    dayLength = dayInfo.dayLength
   }
 
   return {

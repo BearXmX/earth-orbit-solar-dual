@@ -76,7 +76,14 @@
                 <span>自转位置 / 地方太阳时</span>
                 <b>{{ formatClock(localSolarMinutes) }}</b>
               </div>
-              <el-slider v-model="localSolarMinutes" :min="0" :max="1439" :step="5" :show-tooltip="false" />
+              <el-slider
+                :model-value="localSolarSliderValue"
+                :min="0"
+                :max="1440"
+                :step="5"
+                :show-tooltip="false"
+                @input="handleLocalSolarSliderInput"
+              />
               <div class="quick-time-row">
                 <el-button size="small" round @click="jumpToSunrise">日出</el-button>
                 <el-button size="small" round @click="setLocalSolarTime(12)">正午</el-button>
@@ -177,7 +184,7 @@
               >夹角标注</el-button
             >
             <el-button size="small" :type="layers.zones ? 'primary' : 'default'" @click="layers.zones = !layers.zones">地球五带</el-button>
-            <el-button size="small" :type="layers.tropics ? 'primary' : 'default'" @click="layers.tropics = !layers.tropics">回归线</el-button>
+            <el-button size="small" :type="layers.tropics ? 'primary' : 'default'" @click="layers.tropics = !layers.tropics">回归线&极圈</el-button>
             <el-button size="small" :type="layers.orbit ? 'primary' : 'default'" @click="layers.orbit = !layers.orbit">公转轨道</el-button>
             <el-button size="small" :type="layers.subsolar ? 'primary' : 'default'" @click="layers.subsolar = !layers.subsolar">直射点</el-button>
             <el-button size="small" :type="layers.axisArrow ? 'primary' : 'default'" @click="layers.axisArrow = !layers.axisArrow"
@@ -514,6 +521,16 @@ const EARTH_R = 0.56
 const SUN_R = 0.76
 const ORBIT_R = 4.05
 const AXIAL_TILT = 23.44
+// 极昼/极夜临界点加一点容差，避免北极圈 66.56° + 夏至赤纬 23.437° 这种浮点误差被误判成非极昼。
+const POLAR_EPS = 0.0015
+// 公转方向改为逆时针后，夏至位置从右侧换到左侧；
+// 地轴倾斜方向也必须同步取反，保证夏至北半球朝向太阳、冬至北半球背向太阳。
+const AXIAL_TILT_ROTATION = -AXIAL_TILT * DEG
+
+const ORBIT_START_DAY = 80
+const ORBIT_START_THETA = -Math.PI / 2
+// 从当前默认视角看，日期增加时公转应为逆时针：春分 → 夏至 → 秋分 → 冬至。
+const ORBIT_DIR = -1
 
 let earthRenderer: THREE.WebGLRenderer | null = null
 let earthScene: THREE.Scene | null = null
@@ -637,6 +654,8 @@ const formulaRows = computed(() => {
   const phi = selectedPoint.lat
   const lambda = selectedPoint.lng
   const delta = solar.value.declination
+  const rawDelta = rawSolarDeclination(n)
+  const teachingDelta = teachingTermDeclination(n)
   const eot = equationOfTime(n)
   const solarTime = solar.value.solarTimeValue
   const hourAngle = (solarTime - 720) / 4
@@ -651,9 +670,12 @@ const formulaRows = computed(() => {
   return [
     {
       name: '太阳直射纬度 δ',
-      desc: 'δ 表示太阳直射点所在的纬度，n 表示一年中的第几天。它决定太阳直射点在南北回归线之间的位置。',
+      desc: 'δ 表示太阳直射点所在的纬度，n 表示一年中的第几天。四个节气日按课堂教学标准校准到赤道或回归线，便于演示。',
       formula: 'δ≈23.44°×sin[360°×(284+n)/365]',
-      dynamic: `n=${n}，δ≈23.44°×sin[360°×(284+${n})/365]=${signedDeg(delta)}`,
+      dynamic:
+        teachingDelta === null
+          ? `n=${n}，δ≈23.44°×sin[360°×(284+${n})/365]=${signedDeg(delta)}`
+          : `n=${n}，近似公式 δ≈${signedDeg(rawDelta)}，节气教学显示校准为 ${signedDeg(delta)}`,
     },
     {
       name: '地方太阳时 Tₛ',
@@ -722,10 +744,25 @@ const solar = computed(() =>
 const localSolarMinutes = computed({
   get: () => solar.value.solarTimeValue,
   set: value => {
-    const eot = equationOfTime(dayNo.value)
-    utcMinutes.value = wrapMinutes(Number(value) - selectedPoint.lng * 4 - eot)
+    utcMinutes.value = utcFromLocalSolarMinutes(Number(value), dayNo.value)
   },
 })
+
+const localSolarSliderValue = computed(() => {
+  const value = localSolarMinutes.value
+  // 让滑块可以顺畅走到 24:00，避免 Element Plus Slider 在 max=1439 时把播放卡回 23:59。
+  return value > 1439.5 ? 1440 : value
+})
+
+function handleLocalSolarSliderInput(value: number | number[]) {
+  const raw = Array.isArray(value) ? value[0] : value
+  playing.value = false
+
+  const next = Number(raw) >= 1440 ? 0 : clamp(Number(raw), 0, 1440)
+  localSolarMinutes.value = next
+  runtimeUtcMinutes = utcMinutes.value
+  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+}
 
 watch([dateValue, rayCount, lightIntensity, nightBrightness, cityLightStrength, () => selectedPoint.lat, () => selectedPoint.lng], () => {
   if (!playing.value && !suppressSceneUpdate) updateEarthScene()
@@ -764,6 +801,8 @@ watch(
 )
 
 watch(utcMinutes, value => {
+  if (playing.value) return
+
   runtimeUtcMinutes = value
   updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
 })
@@ -791,16 +830,32 @@ onBeforeUnmount(() => {
 })
 
 function orbitThetaByDay(day: number) {
-  return ((day - 80) / 365) * Math.PI * 2 - Math.PI / 2
+  return ORBIT_START_THETA + ORBIT_DIR * ((day - ORBIT_START_DAY) / 365) * Math.PI * 2
+}
+
+function orbitTangentByDay(day: number) {
+  const theta = orbitThetaByDay(day)
+  return new THREE.Vector3(-Math.sin(theta) * ORBIT_DIR, 0, Math.cos(theta) * ORBIT_DIR).normalize()
+}
+
+function runtimeLocalSolarMinutes(day = playing.value ? autoOrbitDay : dayNo.value) {
+  return wrapMinutes(runtimeUtcMinutes + selectedPoint.lng * 4 + equationOfTime(day))
+}
+
+function utcFromLocalSolarMinutes(localMinutes: number, day = playing.value ? autoOrbitDay : dayNo.value) {
+  return wrapMinutes(localMinutes - selectedPoint.lng * 4 - equationOfTime(day))
 }
 
 function visualOrbitDay() {
   const baseDay = playing.value ? autoOrbitDay : dayNo.value
-  return baseDay + runtimeUtcMinutes / 1440
+  // 公转日期进度跟随界面展示的“地方太阳时”，不是 UTC。
+  // 否则北京这种东经点位会在 UTC 跨日时，也就是地方太阳时早上 7 点多就提前加一天。
+  return baseDay + runtimeLocalSolarMinutes(baseDay) / 1440
 }
 
 function dateFromDay(day: number) {
-  const safeDay = clamp(Math.round(day), 1, 365)
+  // 小数日没有真正跨过 24:00 前，仍然属于当天；不能 round，round 会在中午后提前切到下一天。
+  const safeDay = clamp(Math.floor(day), 1, 365)
   return new Date(Date.UTC(dateObj.value.getUTCFullYear(), 0, safeDay))
 }
 
@@ -902,7 +957,7 @@ function updateEarthScene() {
   // 太阳在世界中心；地球沿轨道公转，地球本体绕自身地轴自西向东自转。
   const earthToSunWorld = earthPos.clone().multiplyScalar(-1).normalize()
 
-  tiltGroup.rotation.z = AXIAL_TILT * DEG
+  tiltGroup.rotation.z = AXIAL_TILT_ROTATION
   // 地球自西向东真实自转。直射点展示由世界空间高亮光线负责，不再强行扭转地球贴图。
   spinGroup.rotation.y = (utcMinutes.value / 1440) * Math.PI * 2
 
@@ -1275,7 +1330,7 @@ function updateAnimatedOrbitFrame(day: number, utc = runtimeUtcMinutes) {
   earthSystem.position.copy(earthPos)
 
   // 北半球夏至日，北极圈应朝向太阳；冬至日应背向太阳。
-  tiltGroup.rotation.z = AXIAL_TILT * DEG
+  tiltGroup.rotation.z = AXIAL_TILT_ROTATION
 
   // 自转每帧执行，并按太阳直射经度对齐昼夜面。
   const frameSolar = calcSolarData({
@@ -1285,7 +1340,7 @@ function updateAnimatedOrbitFrame(day: number, utc = runtimeUtcMinutes) {
     lng: selectedPoint.lng,
   })
 
-  const invTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -AXIAL_TILT * DEG)
+  const invTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -AXIAL_TILT_ROTATION)
   const sunInTiltLocal = earthToSunWorld.clone().applyQuaternion(invTilt).normalize()
   const sunLngInTiltLocal = Math.atan2(-sunInTiltLocal.z, sunInTiltLocal.x) * RAD
   spinGroup.rotation.y = (sunLngInTiltLocal - frameSolar.subsolarLng) * DEG
@@ -1543,7 +1598,7 @@ function createOrbitDirectionArrows() {
   days.forEach((day, index) => {
     const theta = orbitThetaByDay(day)
     const pos = new THREE.Vector3(Math.cos(theta) * ORBIT_R, 0, Math.sin(theta) * ORBIT_R)
-    const tangent = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta)).normalize()
+    const tangent = orbitTangentByDay(day)
     const start = pos.clone().sub(tangent.clone().multiplyScalar(0.12))
     const end = pos.clone().add(tangent.clone().multiplyScalar(0.18))
     group.add(lineNoDepth([start, end], 0x9af5ff, 0.68))
@@ -1559,7 +1614,7 @@ function createOrbitDirectionArrows() {
 
 function createAxisDirectionArrow() {
   const group = new THREE.Group()
-  const axis = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(0, 0, 1), AXIAL_TILT * DEG).normalize()
+  const axis = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(0, 0, 1), AXIAL_TILT_ROTATION).normalize()
   const start = axis.clone().multiplyScalar(-EARTH_R * 1.34)
   const end = axis.clone().multiplyScalar(EARTH_R * 1.92)
   const lineObj = new THREE.Line(
@@ -1702,6 +1757,9 @@ function createEquatorPlane() {
 
 function createHeatZones() {
   const group = new THREE.Group()
+  const zoneBandRadius = EARTH_R * 1.018
+  const zoneBoundaryRadius = EARTH_R * 1.026
+  const zoneLabelRadius = EARTH_R * 1.065
   const zones = [
     { min: 66.56, max: 89.8, text: '北寒带', color: 0x009dff, opacity: 0.52, labelLat: 76 },
     { min: 23.44, max: 66.56, text: '北温带', color: 0x00d084, opacity: 0.48, labelLat: 45 },
@@ -1711,21 +1769,21 @@ function createHeatZones() {
   ]
 
   zones.forEach(zone => {
-    group.add(createLatitudeBand(zone.min, zone.max, zone.color, zone.opacity))
+    group.add(createLatitudeBand(zone.min, zone.max, zone.color, zone.opacity, zoneBandRadius))
     group.add(
-      alwaysLabelSprite(zone.text, `#${zone.color.toString(16).padStart(6, '0')}`, 0.118, latLngToVector(zone.labelLat, -132, EARTH_R * 1.145)),
+      alwaysLabelSprite(zone.text, `#${zone.color.toString(16).padStart(6, '0')}`, 0.118, latLngToVector(zone.labelLat, -132, zoneLabelRadius)),
     )
   })
   ;[-66.56, -23.44, 0, 23.44, 66.56].forEach(lat => {
     const points: THREE.Vector3[] = []
-    for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, EARTH_R * 1.092))
+    for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, zoneBoundaryRadius))
     group.add(line(points, lat === 0 ? 0xffffff : 0xf8fbff, lat === 0 ? 0.95 : 0.78))
   })
 
   return group
 }
 
-function createLatitudeBand(latMin: number, latMax: number, color: number, opacity: number) {
+function createLatitudeBand(latMin: number, latMax: number, color: number, opacity: number, radius = EARTH_R * 1.018) {
   const latSegments = 14
   const lngSegments = 180
   const vertices: number[] = []
@@ -1735,7 +1793,7 @@ function createLatitudeBand(latMin: number, latMax: number, color: number, opaci
     const lat = latMin + ((latMax - latMin) * i) / latSegments
     for (let j = 0; j <= lngSegments; j++) {
       const lng = -180 + (360 * j) / lngSegments
-      const v = latLngToVector(lat, lng, EARTH_R * 1.082)
+      const v = latLngToVector(lat, lng, radius)
       vertices.push(v.x, v.y, v.z)
     }
   }
@@ -1777,7 +1835,7 @@ function createObliquityAngleMarker() {
   // 从地球中心出发表示黄赤交角：
   // 白色中心点为地心；蓝色线在黄道面 / 轨道面上；黄色线在赤道面上。
   // 两条线的共同起点都在地心，夹角弧线围绕地心标出 23.44°。
-  const angle = AXIAL_TILT * DEG
+  const angle = AXIAL_TILT_ROTATION
   const lineLen = EARTH_R * 1.5
   const arcRadius = EARTH_R * 0.42
   const eclipticDir = new THREE.Vector3(1, 0, 0)
@@ -2178,14 +2236,13 @@ function animate(now: number) {
   lastTime = now
 
   if (playing.value) {
-    // 公转日期由自转决定：自转完整一圈 = 增加一天，一年 365 天。
-    // runtimeUtcMinutes 每帧推进；dateValue 只有跨天时才同步，避免重建场景。
+    // 公转日期由“地方太阳时”决定：界面上的自转时间从 23:59 走到 00:00，才增加一天。
+    // 不能用 UTC 跨日判断，否则北京会在 UTC 00:00，也就是地方太阳时早上 7 点多提前加一天。
     const addMinutes = dt * 6 * playSpeed.value
-    const nextMinutes = runtimeUtcMinutes + addMinutes
-    const passedDays = Math.floor(nextMinutes / 1440)
-
-    runtimeUtcMinutes = nextMinutes % 1440
-    utcMinutes.value = runtimeUtcMinutes
+    const currentLocalMinutes = runtimeLocalSolarMinutes(autoOrbitDay)
+    const nextLocalRaw = currentLocalMinutes + addMinutes
+    const passedDays = Math.floor(nextLocalRaw / 1440)
+    const nextLocalMinutes = wrapMinutes(nextLocalRaw)
 
     if (passedDays > 0) {
       autoOrbitDay += passedDays
@@ -2193,9 +2250,11 @@ function animate(now: number) {
       setDateByDay(Math.floor(autoOrbitDay), false)
     }
 
-    updateAnimatedOrbitFrame(autoOrbitDay + runtimeUtcMinutes / 1440, runtimeUtcMinutes)
+    runtimeUtcMinutes = utcFromLocalSolarMinutes(nextLocalMinutes, autoOrbitDay)
+    utcMinutes.value = runtimeUtcMinutes
+    updateAnimatedOrbitFrame(autoOrbitDay + nextLocalMinutes / 1440, runtimeUtcMinutes)
   } else {
-    updateAnimatedOrbitFrame(tweenOrbitVisualDay ?? dayNo.value + runtimeUtcMinutes / 1440, runtimeUtcMinutes)
+    updateAnimatedOrbitFrame(tweenOrbitVisualDay ?? visualOrbitDay(), runtimeUtcMinutes)
   }
 
   earthControls?.update()
@@ -2845,8 +2904,24 @@ function calcSolarData(input: { date: Date; utcMinutes: number; lat: number; lng
   }
 }
 
-function solarDeclination(doy: number) {
+function rawSolarDeclination(doy: number) {
   return 23.44 * Math.sin(DEG * ((360 * (284 + doy)) / 365))
+}
+
+function teachingTermDeclination(doy: number) {
+  const rounded = Math.round(doy)
+  const termDeclinationMap: Record<number, number> = {
+    79: 0, // 春分：直射赤道
+    172: AXIAL_TILT, // 夏至：直射北回归线
+    266: 0, // 秋分：直射赤道
+    356: -AXIAL_TILT, // 冬至：直射南回归线
+  }
+
+  return termDeclinationMap[rounded] ?? null
+}
+
+function solarDeclination(doy: number) {
+  return teachingTermDeclination(doy) ?? rawSolarDeclination(doy)
 }
 
 function equationOfTime(doy: number) {
@@ -2872,9 +2947,12 @@ function azimuthFromHourAngle(lat: number, dec: number, h: number) {
 
 function dayLengthInfo(lat: number, dec: number) {
   const cosH0 = -Math.tan(lat * DEG) * Math.tan(dec * DEG)
-  if (cosH0 <= -1) return { type: 'polar-day' as const, h0: 180, dayLength: 24 }
-  if (cosH0 >= 1) return { type: 'polar-night' as const, h0: 0, dayLength: 0 }
-  const h0 = Math.acos(cosH0) * RAD
+
+  // 加容差：北极圈 / 南极圈在夏至、冬至临界点附近，避免 23.437° 这类近似误差造成“差几秒不是极昼/极夜”。
+  if (cosH0 <= -1 + POLAR_EPS) return { type: 'polar-day' as const, h0: 180, dayLength: 24 }
+  if (cosH0 >= 1 - POLAR_EPS) return { type: 'polar-night' as const, h0: 0, dayLength: 0 }
+
+  const h0 = Math.acos(clamp(cosH0, -1, 1)) * RAD
   return { type: 'normal' as const, h0, dayLength: (2 * h0) / 15 }
 }
 
