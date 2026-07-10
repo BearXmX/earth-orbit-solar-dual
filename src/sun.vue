@@ -1723,4 +1723,60 @@ function disposeScene() {
 .mini-hud div:nth-child(3) b {
   color: #fff1b8;
 }
+
+
+/* ===================== 太阳视运动组件：平板 / 小屏浮层压缩 v3 ===================== */
+.sun-lite {
+  min-height: 400px;
+}
+
+.canvas-wrap {
+  min-height: inherit;
+}
+
+@media (max-width: 1440px), (max-height: 860px) {
+  .mini-hud {
+    right: 10px;
+    bottom: 10px;
+    grid-template-columns: repeat(3, minmax(78px, 1fr));
+    gap: 6px;
+    max-width: min(420px, calc(100% - 20px));
+  }
+
+  .mini-hud div {
+    padding: 6px;
+    border-radius: 10px;
+  }
+
+  .mini-hud span {
+    font-size: 9px;
+  }
+
+  .mini-hud b {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 1180px), (max-height: 760px) {
+  .mini-hud {
+    grid-template-columns: repeat(2, minmax(78px, 1fr));
+    max-width: min(300px, calc(100% - 20px));
+    gap: 5px;
+  }
+
+  .mini-hud div {
+    padding: 5px 6px;
+  }
+}
+
+@media (max-width: 760px) {
+  .mini-hud {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    max-width: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 </style>

@@ -184,7 +184,7 @@
               >夹角标注</el-button
             >
             <el-button size="small" :type="layers.zones ? 'primary' : 'default'" @click="layers.zones = !layers.zones">地球五带</el-button>
-            <el-button size="small" :type="layers.tropics ? 'primary' : 'default'" @click="layers.tropics = !layers.tropics">回归线&极圈</el-button>
+            <el-button size="small" :type="layers.tropics ? 'primary' : 'default'" @click="layers.tropics = !layers.tropics">回归线</el-button>
             <el-button size="small" :type="layers.orbit ? 'primary' : 'default'" @click="layers.orbit = !layers.orbit">公转轨道</el-button>
             <el-button size="small" :type="layers.subsolar ? 'primary' : 'default'" @click="layers.subsolar = !layers.subsolar">直射点</el-button>
             <el-button size="small" :type="layers.axisArrow ? 'primary' : 'default'" @click="layers.axisArrow = !layers.axisArrow"
@@ -448,6 +448,7 @@ const utcMinutes = ref(4 * 60)
 const playSpeed = ref(10)
 const playing = ref(false)
 const focusCenter = ref<FocusCenter>('sun')
+const activeCameraMode = ref<CameraMode>('overview')
 const solarVisible = ref(false)
 const cityKey = ref('beijing')
 const rayCount = ref(3)
@@ -571,6 +572,7 @@ let earthRendererResizeDirty = true
 let miniRendererResizeDirty = true
 let lastEarthCssWidth = 0
 let lastEarthCssHeight = 0
+let lastEarthViewportFitKey = ''
 let lastMiniCssWidth = 0
 let lastMiniCssHeight = 0
 const miniEarthPos = new THREE.Vector3()
@@ -814,6 +816,18 @@ watch(miniCameraVisible, () => {
   })
 })
 
+// 太阳视运动联动开关会改变右侧舞台布局。
+// 切换后必须等 DOM 尺寸稳定，再同步 WebGL drawingBuffer 和相机；
+// 否则平板端容易出现“canvas 实际尺寸还按旧布局，场景中心跑到右下角”的错觉。
+watch(solarVisible, async () => {
+  await nextTick()
+  requestAnimationFrame(() => {
+    lastEarthViewportFitKey = ''
+    resizeEarth(true)
+    resizeMiniCameraRenderer(true)
+  })
+})
+
 onMounted(async () => {
   await nextTick()
   initEarthScene()
@@ -871,9 +885,20 @@ function initEarthScene() {
 
   earthRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   earthRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6))
-  earthRenderer.setSize(earthRef.value.clientWidth, earthRef.value.clientHeight, false)
+  earthRenderer.setSize(earthRef.value.clientWidth, earthRef.value.clientHeight, true)
   earthRenderer.setClearColor(0x000000, 0)
-  earthRef.value.appendChild(earthRenderer.domElement)
+
+  // 关键修复：主 WebGL canvas 必须使用父容器的 CSS 尺寸。
+  // 平板端 DPR 较高时，如果 setSize(..., false) 或 scoped CSS 没命中动态 canvas，
+  // canvas 会按 drawingBuffer 尺寸显示，导致画布中心落到容器右下角，太阳系整体偏移。
+  const earthCanvas = earthRenderer.domElement
+  earthCanvas.className = 'earth-main-canvas'
+  earthCanvas.style.position = 'absolute'
+  earthCanvas.style.inset = '0'
+  earthCanvas.style.display = 'block'
+  earthCanvas.style.width = '100%'
+  earthCanvas.style.height = '100%'
+  earthRef.value.appendChild(earthCanvas)
   initMiniCameraRenderer()
 
   earthControls = new OrbitControls(earthCamera, earthRenderer.domElement)
@@ -2152,6 +2177,7 @@ function getCameraPose(mode: CameraMode) {
 function setCamera(mode: CameraMode) {
   if (!earthCamera || !earthControls) return
 
+  activeCameraMode.value = mode
   const pose = getCameraPose(mode)
   focusCenter.value = pose.focus
   animateCameraTo(pose.position, pose.target)
@@ -2272,8 +2298,18 @@ function initMiniCameraRenderer() {
   })
   miniRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35))
   miniRenderer.setClearColor(0x041322, 1)
-  miniRenderer.domElement.className = 'mini-camera-canvas'
-  miniCameraCanvasRef.value.appendChild(miniRenderer.domElement)
+
+  // 副相机 canvas 也必须让 CSS 尺寸严格等于外部容器。
+  // 平板端 DPR 较高时，如果只改 drawingBuffer、不改 canvas CSS 尺寸，
+  // 副相机场景中心会偏到右下角，现象和主场景之前一致。
+  const miniCanvas = miniRenderer.domElement
+  miniCanvas.className = 'mini-camera-canvas'
+  miniCanvas.style.position = 'absolute'
+  miniCanvas.style.inset = '0'
+  miniCanvas.style.display = 'block'
+  miniCanvas.style.width = '100%'
+  miniCanvas.style.height = '100%'
+  miniCameraCanvasRef.value.appendChild(miniCanvas)
 
   miniResizeObserver = new ResizeObserver(() => resizeMiniCameraRenderer())
   miniResizeObserver.observe(miniCameraCanvasRef.value)
@@ -2297,7 +2333,15 @@ function syncMiniRendererSize() {
   lastMiniCssWidth = width
   lastMiniCssHeight = height
 
-  miniRenderer.setSize(width, height, false)
+  miniRenderer.setSize(width, height, true)
+
+  const miniCanvas = miniRenderer.domElement
+  miniCanvas.style.position = 'absolute'
+  miniCanvas.style.inset = '0'
+  miniCanvas.style.display = 'block'
+  miniCanvas.style.width = `${width}px`
+  miniCanvas.style.height = `${height}px`
+
   miniCamera.aspect = width / Math.max(1, height)
   miniCamera.updateProjectionMatrix()
 }
@@ -2563,9 +2607,54 @@ function syncEarthRendererSize() {
   lastEarthCssWidth = width
   lastEarthCssHeight = height
 
-  earthRenderer.setSize(width, height, false)
+  // 关键修复：第三个参数必须为 true，让 three 同步 canvas 的 CSS 尺寸。
+  // 否则高 DPR 平板端 canvas 会以更大的 drawingBuffer 尺寸参与布局，
+  // 父容器裁切左上角后，场景中心就会看起来跑到右下角。
+  earthRenderer.setSize(width, height, true)
+  syncEarthCanvasCssSize(width, height)
+
   earthCamera.aspect = width / Math.max(1, height)
   earthCamera.updateProjectionMatrix()
+  fitOverviewCameraToEarthViewport(width, height)
+}
+
+function syncEarthCanvasCssSize(width: number, height: number) {
+  if (!earthRenderer) return
+
+  const canvas = earthRenderer.domElement
+  canvas.className = 'earth-main-canvas'
+  canvas.style.position = 'absolute'
+  canvas.style.inset = '0'
+  canvas.style.display = 'block'
+  canvas.style.width = `${width}px`
+  canvas.style.height = `${height}px`
+  canvas.style.maxWidth = '100%'
+  canvas.style.maxHeight = '100%'
+}
+
+function fitOverviewCameraToEarthViewport(width: number, height: number) {
+  if (!earthCamera || !earthControls) return
+  if (focusCenter.value !== 'sun' || activeCameraMode.value !== 'overview') return
+
+  const aspect = width / Math.max(1, height)
+  const compact = width < 780 || height < 540
+  const veryWide = aspect > 1.82
+  const lowHeight = height < 500
+  const key = `${compact ? 'compact' : 'normal'}-${veryWide ? 'wide' : 'std'}-${lowHeight ? 'low' : 'high'}-${Math.round(aspect * 10)}`
+
+  // 只在容器形态发生明显变化时重置相机，避免用户正常拖拽视角时每帧被抢回。
+  if (key === lastEarthViewportFitKey) return
+  lastEarthViewportFitKey = key
+
+  const position = compact || veryWide || lowHeight
+    ? new THREE.Vector3(6.85, 3.85, 7.25)
+    : new THREE.Vector3(5.9, 3.25, 6.3)
+
+  earthCamera.fov = compact || lowHeight ? 46 : 42
+  earthCamera.position.copy(position)
+  earthControls.target.set(0, 0, 0)
+  earthCamera.updateProjectionMatrix()
+  earthControls.update()
 }
 
 function disposeEarthScene() {
@@ -3544,6 +3633,16 @@ function clamp(value: number, min: number, max: number) {
   height: 100% !important;
 }
 
+:deep(.mini-camera-canvas) {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
 .mini-camera-select-row {
   position: absolute;
   top: 8px;
@@ -3961,4 +4060,753 @@ function clamp(value: number, min: number, max: number) {
   flex: 1;
   margin-left: 0;
 }
+
+/* ===================== 平板 / 小屏适配修正 v4 =====================
+   目标：
+   1. 根页面不出现页面级滚动条，整个课件固定在一屏内。
+   2. 左侧控制面板独立滚动，平板端宽度适当缩小。
+   3. 右侧主场景容器独立滚动；小屏 / 平板低高度时，地球主场景与太阳视运动上下布局，滚动发生在右侧容器内。
+   4. 实时数据、公式、图例浮层压缩，但不直接隐藏公式面板。
+*/
+.earth-orbit-lab {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.earth-orbit-lab::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.left-panel::-webkit-scrollbar,
+.stage-zone::-webkit-scrollbar,
+.floating-card::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.left-panel::-webkit-scrollbar-thumb,
+.stage-zone::-webkit-scrollbar-thumb,
+.floating-card::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(117, 219, 255, 0.32);
+}
+
+.left-panel::-webkit-scrollbar-track,
+.stage-zone::-webkit-scrollbar-track,
+.floating-card::-webkit-scrollbar-track {
+  background: rgba(4, 13, 28, 0.18);
+}
+
+.page {
+  height: calc(100dvh - 74px);
+  min-height: 0;
+  grid-template-columns: clamp(218px, 16.5vw, 270px) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.left-panel {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 5px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(117, 219, 255, 0.28) transparent;
+}
+
+/* 原样式把左侧滚动条宽度设成 0，这里覆盖回来，平板端能看出还能继续往下滚。 */
+.left-panel::-webkit-scrollbar {
+  width: 5px;
+}
+
+.stage-zone {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(117, 219, 255, 0.28) transparent;
+}
+
+.world-stage {
+  min-height: 560px;
+}
+
+.solar-lite-shell {
+  min-height: 500px;
+}
+
+.observer-card,
+.formula-card,
+.legend-card {
+  pointer-events: auto;
+}
+
+.observer-card {
+  width: min(348px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.formula-card {
+  width: min(382px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.legend-card {
+  width: min(230px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+@media (max-width: 1440px), (max-height: 860px) {
+  .lab-header {
+    height: 52px;
+    margin-top: 6px;
+    border-radius: 15px;
+  }
+
+  .brand-sun {
+    width: 32px;
+    height: 32px;
+    border-radius: 11px;
+  }
+
+  .brand h1 {
+    font-size: 15px;
+  }
+
+  .brand-sub {
+    font-size: 8px;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
+  .header-actions :deep(.el-button) {
+    height: 25px;
+    padding: 0 8px;
+    font-size: 9px;
+  }
+
+  .page {
+    height: calc(100dvh - 64px);
+    min-height: 0;
+    grid-template-columns: clamp(206px, 17vw, 238px) minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 8px 8px;
+  }
+
+  .panel-card {
+    padding: 8px;
+    margin-bottom: 7px;
+    border-radius: 12px;
+  }
+
+  .panel-title {
+    margin-bottom: 7px;
+    font-size: 11px;
+  }
+
+  .button-grid,
+  .layer-grid,
+  .city-button-grid,
+  .mini-control-grid {
+    gap: 6px;
+  }
+
+  .mini-control-card {
+    padding: 6px 7px 3px;
+  }
+
+  .term-compare-tip,
+  .misconception-tip,
+  .location-card {
+    padding: 7px;
+  }
+
+  /* 右侧容器内部上下排列。总高度刻意大于右侧容器高度，滚动只出现在 .stage-zone 内。 */
+  .stage-zone.split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(520px, 64vh) minmax(440px, 54vh);
+  }
+
+  .world-stage {
+    min-height: 520px;
+    min-width: 0;
+  }
+
+  .solar-lite-shell {
+    min-height: 440px;
+    min-width: 0;
+  }
+
+  /* 之前 <=1280 直接隐藏公式，这会导致平板看不到；这里强制恢复为缩小版。 */
+  .formula-card,
+  .subsolar-chart-card {
+    display: block;
+  }
+
+  .tip-card {
+    display: none;
+  }
+
+  .observer-card {
+    left: 10px;
+    top: 10px;
+    width: min(300px, calc(100% - 20px));
+    max-height: min(420px, calc(100% - 20px));
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .formula-card {
+    right: 10px;
+    top: 10px;
+    width: min(310px, calc(100% - 20px));
+    max-height: min(390px, calc(100% - 20px));
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .legend-card {
+    left: 10px;
+    bottom: 10px;
+    width: 190px;
+    max-height: 170px;
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .mini-data {
+    gap: 5px;
+  }
+
+  .mini-data div {
+    padding: 6px;
+    border-radius: 9px;
+  }
+
+  .mini-data b {
+    font-size: 10px;
+  }
+
+  .day-night-card,
+  .observer-subsolar-chart {
+    margin-top: 6px;
+    padding: 6px;
+  }
+
+  .subsolar-chart {
+    height: 108px;
+  }
+
+  .formula-list {
+    gap: 6px;
+  }
+
+  .formula-line {
+    gap: 3px;
+  }
+
+  .formula-desc {
+    font-size: 9px;
+    line-height: 1.35;
+  }
+
+  .formula-line code {
+    padding: 6px;
+    font-size: 9px;
+    line-height: 1.35;
+  }
+
+  .float-head {
+    margin-bottom: 6px;
+  }
+
+  .float-head b {
+    font-size: 11px;
+  }
+
+  .floating-card span,
+  .mini-data span,
+  .day-night-head span,
+  .day-night-axis span {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 1180px), (max-height: 760px) {
+  .page {
+    grid-template-columns: 196px minmax(0, 1fr);
+  }
+
+  .stage-zone.split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(480px, 64vh) minmax(400px, 55vh);
+  }
+
+  .world-stage {
+    min-height: 480px;
+    min-width: 0;
+  }
+
+  .solar-lite-shell {
+    min-height: 400px;
+    min-width: 0;
+  }
+
+  .observer-card {
+    width: 270px;
+    max-height: 350px;
+  }
+
+  .formula-card {
+    width: 284px;
+    max-height: 350px;
+  }
+
+  .legend-card {
+    width: 172px;
+    max-height: 150px;
+  }
+
+  /* 高度特别紧张时，实时数据里的年变化小图先收起来，保住关键数据和公式。 */
+  .observer-subsolar-chart {
+    display: none;
+  }
+
+  .day-night-card {
+    padding: 6px;
+  }
+}
+
+@media (max-width: 960px) {
+  .earth-orbit-lab {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .lab-header {
+    height: 52px;
+    min-height: 52px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .brand {
+    gap: 8px;
+  }
+
+  .brand h1 {
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .brand-sub,
+  .edition-tag {
+    display: none;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: calc(100vw - 220px);
+    padding-bottom: 2px;
+  }
+
+  .header-actions :deep(.el-button) {
+    flex: 0 0 auto;
+  }
+
+  .page {
+    height: calc(100dvh - 64px);
+    min-height: 0;
+    overflow: hidden;
+    grid-template-columns: clamp(168px, 26vw, 196px) minmax(0, 1fr);
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .left-panel {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+  }
+
+  .panel-card {
+    padding: 7px;
+    margin-bottom: 6px;
+  }
+
+  .panel-title {
+    font-size: 10px;
+  }
+
+  .stage-zone,
+  .stage-zone.split {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(470px, 66vh) minmax(390px, 56vh);
+  }
+
+  .world-stage {
+    min-height: 470px;
+    min-width: 0;
+  }
+
+  .solar-lite-shell {
+    min-height: 390px;
+    min-width: 0;
+  }
+
+  .observer-card,
+  .formula-card,
+  .legend-card {
+    width: min(280px, calc(100% - 20px));
+    max-height: 300px;
+  }
+}
+
+
+/* ===================== v5：平板端右侧只做容器内纵向滚动，避免太阳场景被横向裁切 ===================== */
+@media (max-width: 1440px), (max-height: 860px) {
+  .stage-zone,
+  .stage-zone.split {
+    overflow-y: auto;
+    overflow-x: hidden;
+    justify-items: stretch;
+  }
+
+  .world-stage,
+  .solar-lite-shell {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .canvas-host,
+  .solar-component {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+
+/* ===================== v6：修复桌面端主场景高度只占半屏 + 平板端主视图居中 ===================== */
+.stage-zone {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  grid-auto-rows: minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.stage-zone.split {
+  grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.86fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.stage-zone > .world-stage,
+.stage-zone > .solar-lite-shell {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.stage-zone:not(.split) > .world-stage {
+  min-height: 0;
+}
+
+@media (max-width: 1440px), (max-height: 860px) {
+  .stage-zone,
+  .stage-zone.split {
+    height: 100%;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(520px, 64vh) minmax(440px, 54vh);
+    align-content: start;
+  }
+
+  .stage-zone > .world-stage {
+    height: auto;
+    min-height: 520px;
+  }
+
+  .stage-zone > .solar-lite-shell {
+    height: auto;
+    min-height: 440px;
+  }
+}
+
+@media (max-width: 1180px), (max-height: 760px) {
+  .stage-zone,
+  .stage-zone.split {
+    grid-template-rows: minmax(500px, 68vh) minmax(420px, 58vh);
+  }
+
+  .stage-zone > .world-stage {
+    min-height: 500px;
+  }
+
+  .stage-zone > .solar-lite-shell {
+    min-height: 420px;
+  }
+}
+
+@media (min-width: 1441px) and (min-height: 861px) {
+  .stage-zone.split > .world-stage,
+  .stage-zone.split > .solar-lite-shell {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+
+
+/* ===================== v7：容器滚动与主场景居中最终修正 =====================
+   核心原则：
+   1. 页面本身不滚动；左侧控制栏单独滚动。
+   2. 未开启太阳视运动联动时，右侧 3D 主场景必须一屏铺满，不允许 .stage-zone 自己出现滚动条。
+   3. 只有开启联动 split 时，右侧容器才在平板/低高度下纵向滚动。
+   4. world-stage / canvas-host / canvas 三层都必须严格 100% 跟随父容器，避免 WebGL 画布沿用旧尺寸导致场景中心偏到右下角。
+*/
+.earth-orbit-lab {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.page {
+  height: calc(100dvh - 64px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.left-panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.stage-zone {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  align-content: stretch !important;
+  align-items: stretch !important;
+  justify-items: stretch !important;
+  padding-right: 0 !important;
+}
+
+.stage-zone:not(.split) {
+  overflow: hidden !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.stage-zone:not(.split) > .world-stage {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+.world-stage,
+.canvas-host,
+.canvas-host canvas {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+.canvas-host {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+.canvas-host canvas {
+  display: block !important;
+}
+
+/* 桌面端打开联动：左右两栏同高铺满。 */
+.stage-zone.split {
+  overflow: hidden !important;
+  grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.86fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.stage-zone.split > .world-stage,
+.stage-zone.split > .solar-lite-shell {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+/* 只有 split + 平板/低高度时，右侧容器允许纵向滚动，上下展示两个 3D 区域。 */
+@media (max-width: 1440px), (max-height: 860px) {
+  .page {
+    height: calc(100dvh - 64px) !important;
+    grid-template-columns: clamp(206px, 17vw, 238px) minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) {
+    overflow: hidden !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) > .world-stage {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .stage-zone.split {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(520px, 64vh) minmax(440px, 54vh) !important;
+    align-content: start !important;
+    padding-right: 2px !important;
+  }
+
+  .stage-zone.split > .world-stage {
+    height: auto !important;
+    min-height: 520px !important;
+  }
+
+  .stage-zone.split > .solar-lite-shell {
+    height: auto !important;
+    min-height: 440px !important;
+  }
+}
+
+@media (max-width: 1180px), (max-height: 760px) {
+  .page {
+    grid-template-columns: 196px minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) {
+    overflow: hidden !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) > .world-stage {
+    min-height: 0 !important;
+    height: 100% !important;
+  }
+
+  .stage-zone.split {
+    grid-template-rows: minmax(500px, 68vh) minmax(420px, 58vh) !important;
+  }
+
+  .stage-zone.split > .world-stage {
+    min-height: 500px !important;
+  }
+
+  .stage-zone.split > .solar-lite-shell {
+    min-height: 420px !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .page {
+    height: calc(100dvh - 64px) !important;
+    grid-template-columns: clamp(168px, 26vw, 196px) minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) {
+    height: 100% !important;
+    overflow: hidden !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  .stage-zone:not(.split) > .world-stage {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .stage-zone.split {
+    height: 100% !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    grid-template-rows: minmax(470px, 66vh) minmax(390px, 56vh) !important;
+  }
+
+  .stage-zone.split > .world-stage {
+    min-height: 470px !important;
+  }
+
+  .stage-zone.split > .solar-lite-shell {
+    min-height: 390px !important;
+  }
+}
+
+
+
+/* ===================== v8：主 3D canvas CSS 尺寸强制同步 =====================
+   只修父组件主场景 canvas 偏移：
+   - 不改 sun.vue；
+   - 不改公转 / 自转 / 极昼极夜逻辑；
+   - 解决高 DPR 平板端 WebGL canvas 实际显示尺寸大于父容器，导致太阳系中心落在右下角的问题。
+*/
+.canvas-host {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  contain: layout size paint !important;
+}
+
+:deep(.earth-main-canvas) {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
 </style>
