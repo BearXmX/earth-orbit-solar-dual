@@ -162,6 +162,14 @@ const cityRoadMaterials: THREE.MeshStandardMaterial[] = []
 
 let lastPathKey = ''
 let lastCityKey = ''
+let controlsInteracting = false
+let lastCanvasWidth = 0
+let lastCanvasHeight = 0
+let resizeRaf = 0
+let resizeTimer = 0
+let resizeFinalTimer = 0
+let pendingResizeForce = false
+let lastViewportMode = ''
 
 const runtimeMetrics = computed(() => buildRuntimeMetricsFromProps())
 
@@ -220,16 +228,32 @@ function initScene() {
   scene.fog = new THREE.Fog(0x071427, 12.5, 32)
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 160)
-  camera.position.set(7.2, 4.7, 8.2)
-  camera.lookAt(0, 0.5, 0)
+  camera.position.set(8.6, 6.2, 9.8)
+  camera.lookAt(0, 2.15, 0)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
-  renderer.setSize(canvasWrapRef.value.clientWidth, canvasWrapRef.value.clientHeight)
-  renderer.setClearColor(0x071427, 0)
-  renderer.shadowMap.enabled = true
+  const safeRenderMode = shouldUseSafeRenderMode()
+  renderer = new THREE.WebGLRenderer({
+    antialias: !safeRenderMode,
+    alpha: false,
+    powerPreference: safeRenderMode ? 'default' : 'high-performance',
+  })
+  renderer.setPixelRatio(safeRenderMode ? 1 : Math.min(window.devicePixelRatio, 1.5))
+  renderer.setSize(Math.max(1, canvasWrapRef.value.clientWidth), Math.max(1, canvasWrapRef.value.clientHeight), true)
+  renderer.setClearColor(0x071427, 1)
+  renderer.shadowMap.enabled = !safeRenderMode
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  canvasWrapRef.value.appendChild(renderer.domElement)
+
+  const canvas = renderer.domElement
+  canvas.className = 'sun-lite-canvas'
+  canvas.style.position = 'absolute'
+  canvas.style.inset = '0'
+  canvas.style.display = 'block'
+  canvas.style.width = '100%'
+  canvas.style.height = '100%'
+  canvas.style.touchAction = 'none'
+  canvas.style.webkitUserSelect = 'none'
+  canvas.style.userSelect = 'none'
+  canvasWrapRef.value.appendChild(canvas)
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
@@ -237,15 +261,23 @@ function initScene() {
   controls.enablePan = true
   controls.minDistance = 4.2
   controls.maxDistance = 32
-  controls.target.set(0, 0.75, 0)
+  controls.target.set(0, 2.15, 0)
   controls.update()
+  controls.addEventListener('start', () => {
+    controlsInteracting = true
+  })
+  controls.addEventListener('end', () => {
+    controlsInteracting = false
+    // 结束拖拽后补一次高度角夹角等辅助几何，避免拖动过程中频繁重建导致 iPad 闪烁。
+    updateSceneBySolar(runtimeMetrics.value)
+  })
 
   ambientLight = new THREE.AmbientLight(0x9fd7ff, 0.64)
   keyLight = new THREE.DirectionalLight(0xfff0c2, 2.2)
   rimLight = new THREE.DirectionalLight(0x6ee7ff, 0.46)
 
-  keyLight.castShadow = true
-  keyLight.shadow.mapSize.set(2048, 2048)
+  keyLight.castShadow = !safeRenderMode
+  keyLight.shadow.mapSize.set(safeRenderMode ? 512 : 2048, safeRenderMode ? 512 : 2048)
   keyLight.shadow.camera.near = 0.1
   keyLight.shadow.camera.far = 26
   keyLight.shadow.camera.left = -9
@@ -277,9 +309,10 @@ function initScene() {
   createLightRay()
   createNightSkyDecorations()
 
-  resizeObserver = new ResizeObserver(resize)
-  resizeObserver.observe(canvasWrapRef.value)
-  resize()
+  // v10：不要依赖 ResizeObserver 防抖。窗口拖拽时 ResizeObserver 触发节奏不稳定，
+  // 容易和 WebGL setSize / 浏览器重排撞在一起导致闪烁。
+  // 改为在 render loop 里每帧检查容器尺寸，只有尺寸真的变化时才 setSize。
+  resize(true)
 }
 
 function syncFromProps() {
@@ -955,6 +988,11 @@ function updateLightRay(sunPos: THREE.Vector3, visible: boolean) {
 
 function updateAltitudeAngleGauge(metrics: SolarMetrics) {
   if (!altitudeAngleGroup) return
+
+  // iPad / Android 平板拖拽 OrbitControls 时，如果一边拖拽一边重建 TubeGeometry 和 CanvasTexture，
+  // 很容易出现 WebGL 闪烁。拖拽期间保留上一帧辅助线，松手后再补绘。
+  if (controlsInteracting) return
+
   clearGroup(altitudeAngleGroup)
 
   // 太阳在地平线以下时不画夹角，避免视觉上穿过地面。
@@ -1072,7 +1110,8 @@ function makeArcLine(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir: THREE
 function syncThreeJsSunShadow(metrics: SolarMetrics) {
   if (!keyLight || !renderer) return
 
-  const isShadowVisible = layers.shadow && metrics.altitude > 1
+  const safeRenderMode = shouldUseSafeRenderMode()
+  const isShadowVisible = !safeRenderMode && layers.shadow && metrics.altitude > 1
   keyLight.castShadow = isShadowVisible
   renderer.shadowMap.enabled = isShadowVisible
 
@@ -1082,14 +1121,14 @@ function syncThreeJsSunShadow(metrics: SolarMetrics) {
   keyLight.target.updateMatrixWorld()
 
   const dayK = smoothstep(-2, 30, metrics.altitude)
-  keyLight.intensity = isShadowVisible ? 1.35 + dayK * 2.05 : 0.14
+  keyLight.intensity = isShadowVisible ? 1.35 + dayK * 2.05 : 0.92 + dayK * 1.08
 }
 
 function updateSkyByTime(metrics: SolarMetrics) {
   if (!renderer || !scene) return
   const colors = getSmoothSkyColors(metrics.altitude, metrics.solarTime)
 
-  renderer.setClearColor(colors.clear, 0)
+  renderer.setClearColor(colors.clear, 1)
   if (scene.fog instanceof THREE.Fog) {
     scene.fog.color.set(colors.fog)
     scene.fog.near = metrics.altitude <= -4 ? 10 : 12.5
@@ -1514,6 +1553,17 @@ function applyMeshShadowSettings(mesh: THREE.Object3D) {
   mesh.receiveShadow = true
 }
 
+function shouldUseSafeRenderMode() {
+  if (typeof navigator === 'undefined') return false
+
+  const ua = navigator.userAgent || ''
+  const isIOS = /iPad|iPhone|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  const isAndroidTablet = /Android/i.test(ua) && !/Mobile/i.test(ua)
+  const isMobileWebView = /; wv\)|Version\/\d+.*Mobile/i.test(ua)
+
+  return isIOS || isAndroidTablet || isMobileWebView
+}
+
 function degToRad(deg: number) {
   return THREE.MathUtils.degToRad(deg)
 }
@@ -1579,22 +1629,125 @@ function formatHour(v: number) {
   return `${v.toFixed(1)}小时`
 }
 
-function resize() {
-  if (!canvasWrapRef.value || !renderer || !camera) return
-  const width = canvasWrapRef.value.clientWidth
-  const height = canvasWrapRef.value.clientHeight
-  camera.aspect = width / Math.max(1, height)
+function getSolarViewportMode(width: number, height: number) {
+  const aspect = width / Math.max(1, height)
+  if (width < 580 || height < 380) return 'veryCompact'
+  if (width < 720 || height < 430 || aspect > 1.72) return 'compact'
+  return 'normal'
+}
+
+function fitCameraToSolarViewport(width: number, height: number, mode = getSolarViewportMode(width, height)) {
+  if (!camera || !controls) return
+
+  const compact = mode === 'compact'
+  const veryCompact = mode === 'veryCompact'
+
+  // 只在布局档位变化时调整相机，不要在拖拽页面窗口时每一像素都重置相机，
+  // 否则 WebGL 画面会在 iPad / 浏览器缩放拖拽时出现明显闪烁。
+  const targetY = veryCompact ? 3.05 : compact ? 2.75 : 2.15
+  const position = veryCompact
+    ? new THREE.Vector3(0.65, 8.25, 14.2)
+    : compact
+      ? new THREE.Vector3(0.85, 7.35, 12.6)
+      : new THREE.Vector3(8.6, 6.2, 9.8)
+
+  camera.fov = veryCompact ? 56 : compact ? 53 : 46
+  camera.position.copy(position)
+  controls.target.set(0, targetY, 0)
+  camera.lookAt(controls.target)
   camera.updateProjectionMatrix()
-  renderer.setSize(width, height)
+  controls.update()
+}
+
+function requestSolarResize(force = false) {
+  pendingResizeForce = pendingResizeForce || force
+
+  if (force) {
+    if (resizeRaf) cancelAnimationFrame(resizeRaf)
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0
+      const shouldForce = pendingResizeForce
+      pendingResizeForce = false
+      resize(shouldForce)
+    })
+    return
+  }
+
+  // 拖拽页面窗口 / 平板浏览器地址栏变化时，ResizeObserver 会连续触发。
+  // 不要每一帧都 renderer.setSize + 重置相机；等尺寸稳定后再做一次 WebGL resize。
+  if (resizeTimer) window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    resizeTimer = 0
+    const shouldForce = pendingResizeForce
+    pendingResizeForce = false
+    resize(shouldForce)
+  }, 140)
+
+  if (resizeFinalTimer) window.clearTimeout(resizeFinalTimer)
+  resizeFinalTimer = window.setTimeout(() => {
+    resizeFinalTimer = 0
+    pendingResizeForce = false
+    resize(true)
+  }, 320)
+}
+
+function resize(force = false) {
+  if (!canvasWrapRef.value || !renderer || !camera) return
+
+  const rect = canvasWrapRef.value.getBoundingClientRect()
+  const width = Math.max(1, Math.round(rect.width || canvasWrapRef.value.clientWidth || 1))
+  const height = Math.max(1, Math.round(rect.height || canvasWrapRef.value.clientHeight || 1))
+
+  const widthDelta = Math.abs(width - lastCanvasWidth)
+  const heightDelta = Math.abs(height - lastCanvasHeight)
+  if (!force && widthDelta < 2 && heightDelta < 2) return
+
+  lastCanvasWidth = width
+  lastCanvasHeight = height
+
+  const viewportMode = getSolarViewportMode(width, height)
+
+  camera.aspect = width / Math.max(1, height)
+  if (force || viewportMode !== lastViewportMode) {
+    lastViewportMode = viewportMode
+    fitCameraToSolarViewport(width, height, viewportMode)
+  } else {
+    camera.updateProjectionMatrix()
+  }
+
+  // 这里必须 updateStyle=true，并且同步 CSS 尺寸。
+  // 但 resize 已做防抖，避免拖拽页面窗口时连续 setSize 造成 sun 场景闪烁。
+  renderer.setSize(width, height, true)
+  const canvas = renderer.domElement
+  canvas.style.position = 'absolute'
+  canvas.style.inset = '0'
+  canvas.style.display = 'block'
+  canvas.style.width = '100%'
+  canvas.style.height = '100%'
 }
 
 function animate() {
+  // 每帧只“检查”尺寸，只有 width / height 真的变了才 renderer.setSize。
+  // 这样拖拽页面窗口时画布能连续跟随容器，又不会每帧无脑重建 drawingBuffer。
+  resize(false)
   controls?.update()
   renderer?.render(scene, camera)
   animationId = requestAnimationFrame(animate)
 }
 
 function disposeScene() {
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = 0
+  }
+  if (resizeTimer) {
+    window.clearTimeout(resizeTimer)
+    resizeTimer = 0
+  }
+  if (resizeFinalTimer) {
+    window.clearTimeout(resizeFinalTimer)
+    resizeFinalTimer = 0
+  }
   resizeObserver?.disconnect()
   resizeObserver = null
   controls?.dispose()
@@ -1618,8 +1771,13 @@ function disposeScene() {
 }
 
 .canvas-wrap {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .scene-title {
@@ -1776,6 +1934,52 @@ function disposeScene() {
     bottom: 10px;
     max-width: none;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+
+/* v5：小容器下把太阳视运动场景整体拉远并居中；DOM 本身不再产生横向裁切 */
+.canvas-wrap canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+
+/* v6：小容器下让太阳视运动画布按容器居中铺满，不产生内部偏移。 */
+.sun-lite,
+.canvas-wrap {
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-wrap canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+
+/* v10：改为 render loop 每帧检查容器尺寸；只有尺寸变化时才 setSize，避免 ResizeObserver 抖动。 */
+:deep(.sun-lite-canvas) {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  touch-action: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+@supports (-webkit-touch-callout: none) {
+  .mini-hud div,
+  .legend-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(4, 13, 28, 0.82);
   }
 }
 
