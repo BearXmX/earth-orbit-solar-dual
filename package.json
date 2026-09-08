@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test tests/motion-sundial.test.mjs",
     "dev": "vite --host",
     "build:standard": "vite build --mode standard",
     "preview": "vite preview",

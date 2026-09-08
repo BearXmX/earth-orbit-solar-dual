@@ -14,6 +14,10 @@
     </div> -->
 
     <div class="mini-hud">
+      <p v-if="props.sceneObject === 'sundial'" class="sundial-notice" role="status" aria-atomic="true">
+        <b>{{ sundialNotice.title }}</b>
+        <span>{{ sundialNotice.detail }}</span>
+      </p>
       <div>
         <span>太阳高度</span><b>{{ formatDeg(runtimeMetrics.altitude) }}</b>
       </div>
@@ -42,6 +46,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { createEquatorialSundial } from './scene/createEquatorialSundial'
+import { southFacingSolarCameraPosition, southFacingSolarCameraTarget } from './utils/solarView'
+import { solarAltitudeGuide, sundialReadingNotice, sunDirection } from './utils/sundial'
 
 type SolarMetrics = {
   declination: number
@@ -82,6 +89,7 @@ type CityClockItem = {
 }
 
 const props = defineProps<{
+  sceneObject?: 'city' | 'sundial'
   latitude: number
   longitude: number
   dayOfYear: number
@@ -100,7 +108,8 @@ const wrapRef = ref<HTMLDivElement | null>(null)
 const SKY_RADIUS = 7.6
 const GROUND_RADIUS = 7.4
 const GROUND_SURFACE_Y = 0.08
-const OBSERVER_POINT = new THREE.Vector3(-0.02, 0.08, -0.98)
+// 与天球和太阳路径使用同一原点，避免有限距离的太阳标记引入视差。
+const OBSERVER_POINT = new THREE.Vector3(0, 0, 0)
 // 极昼/极夜临界点容差，与父组件保持一致，避免北极圈临界值被浮点误差误判。
 const POLAR_EPS = 0.0015
 
@@ -153,6 +162,7 @@ let sunMesh: THREE.Mesh
 let sunGlow: THREE.Sprite
 let lightRay: THREE.Line
 let hemisphereDome: THREE.Mesh
+let sundialModel: ReturnType<typeof createEquatorialSundial> | null = null
 
 const streetLightItems: StreetLightItem[] = []
 const windowLightItems: WindowLightItem[] = []
@@ -172,6 +182,7 @@ let pendingResizeForce = false
 let lastViewportMode = ''
 
 const runtimeMetrics = computed(() => buildRuntimeMetricsFromProps())
+const sundialNotice = computed(() => sundialReadingNotice(props.latitude, props.altitude, props.azimuth))
 
 const sceneTitle = computed(() => {
   if (state.dayOfYear >= 160 && state.dayOfYear <= 185) return '6月夏至前后 · 北半球路径高、昼长较长'
@@ -228,8 +239,8 @@ function initScene() {
   scene.fog = new THREE.Fog(0x071427, 12.5, 32)
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 160)
-  camera.position.set(8.6, 6.2, 9.8)
-  camera.lookAt(0, 2.15, 0)
+  camera.position.copy(southFacingSolarCameraPosition())
+  camera.lookAt(southFacingSolarCameraTarget())
 
   const safeRenderMode = shouldUseSafeRenderMode()
   renderer = new THREE.WebGLRenderer({
@@ -261,7 +272,7 @@ function initScene() {
   controls.enablePan = true
   controls.minDistance = 4.2
   controls.maxDistance = 32
-  controls.target.set(0, 2.15, 0)
+  controls.target.copy(southFacingSolarCameraTarget())
   controls.update()
   controls.addEventListener('start', () => {
     controlsInteracting = true
@@ -358,11 +369,17 @@ function createCityScene() {
   cityRoadMaterials.length = 0
   cityClockItems.length = 0
 
-  // 基本照搬 App.vue：圆形地面 + 城市街区 + 广告牌/城市时钟 + 原生阴影。
-  createCityRoadNetwork()
-  createCityBlocks()
+  // 日晷场景保留草地、树木和观测点，移除街道及路灯、交通灯等城市设施。
+  if (props.sceneObject === 'sundial') {
+    sundialModel = createEquatorialSundial(renderer)
+    sundialModel.group.position.y = GROUND_SURFACE_Y
+    schoolGroup.add(sundialModel.group)
+  } else {
+    createCityRoadNetwork()
+    createCityBlocks()
+    createCityTimeElements()
+  }
   createRoadsideTreeBelts()
-  createCityTimeElements()
   createCityObservationPoint()
 }
 
@@ -625,7 +642,7 @@ function createCityTimeElements() {
     roadOffsets.forEach(z => createTrafficLight(x + 0.31, z + 0.31, (x + z) * 0.17))
   })
 
-  createCityClockBillboard(0, 0)
+  if (props.sceneObject !== 'sundial') createCityClockBillboard(0, 0)
 }
 
 function createStreetLamp(x: number, z: number, rotation: number) {
@@ -975,6 +992,7 @@ function updateSceneBySolar(metrics: SolarMetrics) {
   updateAltitudeAngleGauge(metrics)
   syncThreeJsSunShadow(metrics)
   updateSkyByTime(metrics)
+  sundialModel?.update(state.latitude, metrics.altitude, metrics.azimuth)
 }
 
 function updateLightRay(sunPos: THREE.Vector3, visible: boolean) {
@@ -1000,20 +1018,12 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
 
   /**
    * 太阳高度角 h 的实时夹角演示：
-   * - 黄色长线：从城市观测点指向太阳的直射光线；
+   * - 黄色长线：从天球观测原点指向太阳的直射光线；
    * - 白色基准线：从同一个夹角顶点出发，表示与地面平行的地平线方向；
    * - 半透明扇形 + 弧线：从白色基准线扫到黄色光线，实时表示 h。
    */
   const rayTarget = OBSERVER_POINT.clone()
-  const sunPos = solarToPosition(metrics, SKY_RADIUS)
-
-  const sunDir = sunPos.clone().sub(rayTarget).normalize()
-  const horizontal = new THREE.Vector3(sunDir.x, 0, sunDir.z)
-  if (horizontal.lengthSq() < 0.0001) horizontal.set(0, 0, -1)
-  horizontal.normalize()
-
-  const visualAltitude = THREE.MathUtils.radToDeg(Math.atan2(sunDir.y, Math.sqrt(sunDir.x * sunDir.x + sunDir.z * sunDir.z)))
-  const shownAltitude = clamp(visualAltitude, 0, 89.5)
+  const { direction: sunDir, horizontal, sunPosition: sunPos } = solarAltitudeGuide(metrics.altitude, metrics.azimuth, SKY_RADIUS)
 
   // 夹角顶点：放在观测点到太阳的直射光线上。白线和黄线都从这里开始，保证对接。
   const origin = rayTarget.clone().add(sunDir.clone().multiplyScalar(1.55))
@@ -1022,7 +1032,7 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
   const horizonEnd = origin.clone().add(horizontal.clone().multiplyScalar(radius * 1.35))
   const sunEdge = origin.clone().add(sunDir.clone().multiplyScalar(radius * 1.18))
 
-  // 完整太阳直射光线：城市观测点 -> 太阳。
+  // 完整太阳直射光线：天球观测原点 -> 太阳，与日晷入射光平行。
   altitudeAngleGroup.add(makeTubeLine([rayTarget, sunPos], 0xffd166, 0.016, 0.96))
   altitudeAngleGroup.add(makeLine([rayTarget, sunPos], 0xfff4bd, 0.42))
 
@@ -1053,7 +1063,7 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
     .add(horizontal.clone().multiplyScalar(radius * 0.42))
     .add(new THREE.Vector3(0, radius * 0.26, 0))
 
-  altitudeAngleGroup.add(createSpriteText(`太阳高度角 h = ${formatDeg(runtimeMetrics.value.altitude)}`, '#fff1b8', labelPos, 0.2))
+  altitudeAngleGroup.add(createSpriteText(`太阳高度角 h = ${formatDeg(metrics.altitude)}`, '#fff1b8', labelPos, 0.2))
 }
 
 function createAngleSector(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir: THREE.Vector3, radius: number, color: number, opacity = 0.18) {
@@ -1116,8 +1126,8 @@ function syncThreeJsSunShadow(metrics: SolarMetrics) {
   renderer.shadowMap.enabled = isShadowVisible
 
   const sunDir = solarToPosition(metrics, 1).normalize()
-  keyLight.position.set(sunDir.x * 9, Math.max(0.08, sunDir.y * 9), sunDir.z * 9)
   keyLight.target.position.set(0, GROUND_SURFACE_Y, 0)
+  keyLight.position.copy(keyLight.target.position).addScaledVector(sunDir, 9)
   keyLight.target.updateMatrixWorld()
 
   const dayK = smoothstep(-2, 30, metrics.altitude)
@@ -1470,10 +1480,7 @@ function computeSolarMetricsByDeclination(latitude: number, declination: number,
 }
 
 function solarToPosition(metrics: SolarMetrics, radius = SKY_RADIUS) {
-  const x = -metrics.east * radius
-  const y = metrics.up * radius
-  const z = metrics.north * radius
-  return new THREE.Vector3(x, y, z)
+  return sunDirection(metrics.altitude, metrics.azimuth).multiplyScalar(radius)
 }
 
 function azimuthAltitudeToVec3(azimuth: number, altitude: number, radius: number) {
@@ -1644,16 +1651,12 @@ function fitCameraToSolarViewport(width: number, height: number, mode = getSolar
 
   // 只在布局档位变化时调整相机，不要在拖拽页面窗口时每一像素都重置相机，
   // 否则 WebGL 画面会在 iPad / 浏览器缩放拖拽时出现明显闪烁。
-  const targetY = veryCompact ? 3.05 : compact ? 2.75 : 2.15
-  const position = veryCompact
-    ? new THREE.Vector3(0.65, 8.25, 14.2)
-    : compact
-      ? new THREE.Vector3(0.85, 7.35, 12.6)
-      : new THREE.Vector3(8.6, 6.2, 9.8)
+  const target = southFacingSolarCameraTarget(mode)
+  const position = southFacingSolarCameraPosition(mode)
 
   camera.fov = veryCompact ? 56 : compact ? 53 : 46
   camera.position.copy(position)
-  controls.target.set(0, targetY, 0)
+  controls.target.copy(target)
   camera.lookAt(controls.target)
   camera.updateProjectionMatrix()
   controls.update()
@@ -1736,6 +1739,8 @@ function animate() {
 }
 
 function disposeScene() {
+  sundialModel?.dispose()
+  sundialModel = null
   if (resizeRaf) {
     cancelAnimationFrame(resizeRaf)
     resizeRaf = 0
@@ -1877,9 +1882,27 @@ function disposeScene() {
   text-shadow: 0 0 12px rgba(255, 209, 102, 0.34);
 }
 
-.mini-hud div:first-child b,
-.mini-hud div:nth-child(3) b {
+.mini-hud div:first-of-type b,
+.mini-hud div:nth-of-type(3) b {
   color: #fff1b8;
+}
+
+.sundial-notice {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(255, 209, 102, 0.35);
+  border-radius: 10px;
+  background: rgba(4, 13, 28, 0.86);
+  line-height: 1.5;
+}
+
+.mini-hud .sundial-notice span {
+  color: #e4eef5;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 
@@ -1933,7 +1956,7 @@ function disposeScene() {
     right: 10px;
     bottom: 10px;
     max-width: none;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

@@ -17,8 +17,8 @@
         <el-button size="small" round @click="setFocusCenter(focusCenter === 'sun' ? 'earth' : 'sun')">
           {{ focusCenter === 'sun' ? '地球中心' : '太阳中心' }}
         </el-button>
-        <el-button size="small" round type="warning" @click="playing = !playing">
-          {{ playing ? '暂停演示' : '开始演示' }}
+        <el-button size="small" round type="warning" @click="toggleAllMotion">
+          {{ playing ? '全部暂停' : '全部开始' }}
         </el-button>
         <el-button size="small" round :type="dataPanelVisible ? 'primary' : 'default'" @click="dataPanelVisible = !dataPanelVisible">
           {{ dataPanelVisible ? '收起实时数据' : '打开实时数据' }}
@@ -62,13 +62,38 @@
         <section class="panel-card">
           <div class="panel-title"><i></i><span>演示控制</span></div>
 
+          <div class="button-grid two motion-controls">
+            <el-button size="small" :type="rotationPlaying ? 'warning' : 'primary'" :aria-pressed="rotationPlaying" @click="toggleMotion('rotation')">
+              {{ rotationPlaying ? '暂停自转' : '开始自转' }}
+            </el-button>
+            <el-button size="small" :type="revolutionPlaying ? 'warning' : 'primary'" :aria-pressed="revolutionPlaying" @click="toggleMotion('revolution')">
+              {{ revolutionPlaying ? '暂停公转' : '开始公转' }}
+            </el-button>
+          </div>
+          <p class="motion-hint" :class="{ 'motion-hint--reverse': revolutionOnly }" role="status" aria-atomic="true">
+            <template v-if="revolutionOnly">
+              <strong>仅公转时，地方太阳时会倒退</strong>
+              这是太阳相对方向反向变化造成的，实际时间仍向前推进。
+            </template>
+            <template v-else>自转、公转可单独启停。停止自转时，公转仍会改变太阳相对方向。</template>
+          </p>
+
           <div class="mini-control-grid">
             <div class="mini-control-card wide">
               <div class="mini-control-head">
                 <span>自动演示速度</span>
                 <b>{{ playSpeed.toFixed(1) }}x</b>
               </div>
-              <el-slider v-model="playSpeed" :min="0.2" :max="20" :step="0.5" :show-tooltip="false" />
+              <el-slider v-model="playSpeed" :min="0.2" :max="100" :step="0.5" :show-tooltip="false" />
+            </div>
+
+            <div class="mini-control-card wide">
+              <div class="mini-control-head">
+                <span>公转额外加速</span>
+                <b>{{ revolutionMultiplier }}x</b>
+              </div>
+              <el-slider v-model="revolutionMultiplier" :min="1" :max="120" :step="1" :show-tooltip="false" />
+              <p class="orbit-speed-hint">约 {{ orbitCycleSeconds }} 秒 / 圈 · 演示加速，1x 恢复原时间比例</p>
             </div>
 
             <div class="mini-control-card wide">
@@ -392,7 +417,7 @@
             </div>
           </div>
 
-          <SunLite
+          <EquatorialSundial
             class="solar-component"
             :latitude="selectedPoint.lat"
             :longitude="selectedPoint.lng"
@@ -414,11 +439,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import earthTextureDataUrl from '@/assets/image/Material.002_diffuse.jpg?inline'
 import earthNightTextureDataUrl from '@/assets/image/Earth_emissive.jpg?inline'
 import sunTextureDataUrl from '@/assets/image/sun.png?inline'
-import SunLite from './sun.vue'
+import EquatorialSundial from './components/EquatorialSundial.vue'
+import { advanceEarthMotion, rotationFromSolarMinutes, solarMinutesFromRotation, wrapOrbitDay } from './utils/earthMotion'
 
 type FocusCenter = 'sun' | 'earth'
 type CameraMode = 'overview' | 'north' | 'ecliptic' | 'point'
@@ -445,8 +471,21 @@ const miniCameraCanvasRef = ref<HTMLDivElement | null>(null)
 
 const dateValue = ref('2026-06-21')
 const utcMinutes = ref(4 * 60)
-const playSpeed = ref(10)
-const playing = ref(false)
+const DEFAULT_PLAY_SPEED = 40
+const playSpeed = ref(DEFAULT_PLAY_SPEED)
+const DEFAULT_REVOLUTION_MULTIPLIER = 60
+const revolutionMultiplier = ref(DEFAULT_REVOLUTION_MULTIPLIER)
+const orbitCycleSeconds = computed(() => Math.round((365 * 1440) / (6 * playSpeed.value * revolutionMultiplier.value)))
+const rotationPlaying = ref(false)
+const revolutionPlaying = ref(false)
+const revolutionOnly = computed(() => revolutionPlaying.value && !rotationPlaying.value)
+const playing = computed({
+  get: () => rotationPlaying.value || revolutionPlaying.value,
+  set: value => {
+    rotationPlaying.value = value
+    revolutionPlaying.value = value
+  },
+})
 const focusCenter = ref<FocusCenter>('sun')
 const activeCameraMode = ref<CameraMode>('overview')
 const solarVisible = ref(false)
@@ -457,7 +496,7 @@ const nightBrightness = ref(1.55)
 const cityLightStrength = ref(2.45)
 
 const dataPanelVisible = ref(true)
-const formulaPanelVisible = ref(true)
+const formulaPanelVisible = ref(false)
 const legendVisible = ref(true)
 const subsolarChartVisible = ref(true)
 const miniCameraVisible = ref(false)
@@ -591,7 +630,7 @@ let raf = 0
 let lastTime = 0
 let autoOrbitDay = 172
 let runtimeUtcMinutes = 4 * 60
-let lastAutoDateSync = 0
+let runtimeSpinRadians = rotationFromSolarMinutes(sunLongitudeAtDay(autoOrbitDay), runtimeUtcMinutes + equationOfTime(172))
 let suppressSceneUpdate = false
 let cameraTweenToken = 0
 let orbitTweenToken = 0
@@ -747,6 +786,8 @@ const localSolarMinutes = computed({
   get: () => solar.value.solarTimeValue,
   set: value => {
     utcMinutes.value = utcFromLocalSolarMinutes(Number(value), dayNo.value)
+    runtimeUtcMinutes = utcMinutes.value
+    runtimeSpinRadians = rotationFromSolarMinutes(sunLongitudeAtDay(autoOrbitDay), Number(value), selectedPoint.lng)
   },
 })
 
@@ -758,12 +799,13 @@ const localSolarSliderValue = computed(() => {
 
 function handleLocalSolarSliderInput(value: number | number[]) {
   const raw = Array.isArray(value) ? value[0] : value
-  playing.value = false
+  cancelOrbitTransition()
+  rotationPlaying.value = false
 
   const next = Number(raw) >= 1440 ? 0 : clamp(Number(raw), 0, 1440)
   localSolarMinutes.value = next
   runtimeUtcMinutes = utcMinutes.value
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  updateAnimatedOrbitFrame(visualOrbitDay())
 }
 
 watch([dateValue, rayCount, lightIntensity, nightBrightness, cityLightStrength, () => selectedPoint.lat, () => selectedPoint.lng], () => {
@@ -798,7 +840,7 @@ watch(
 watch(
   () => [layers.terminator, layers.sunRays, layers.subsolar, layers.latitudeNightArc],
   () => {
-    updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+    updateAnimatedOrbitFrame(visualOrbitDay())
   },
 )
 
@@ -806,7 +848,8 @@ watch(utcMinutes, value => {
   if (playing.value) return
 
   runtimeUtcMinutes = value
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  runtimeSpinRadians = rotationFromSolarMinutes(sunLongitudeAtDay(autoOrbitDay), value + equationOfTime(dayNo.value))
+  updateAnimatedOrbitFrame(visualOrbitDay())
 })
 
 watch(miniCameraVisible, () => {
@@ -839,6 +882,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  orbitTweenToken++
+  cameraTweenToken++
   cancelAnimationFrame(raf)
   disposeEarthScene()
 })
@@ -852,25 +897,41 @@ function orbitTangentByDay(day: number) {
   return new THREE.Vector3(-Math.sin(theta) * ORBIT_DIR, 0, Math.cos(theta) * ORBIT_DIR).normalize()
 }
 
-function runtimeLocalSolarMinutes(day = playing.value ? autoOrbitDay : dayNo.value) {
-  return wrapMinutes(runtimeUtcMinutes + selectedPoint.lng * 4 + equationOfTime(day))
-}
-
-function utcFromLocalSolarMinutes(localMinutes: number, day = playing.value ? autoOrbitDay : dayNo.value) {
-  return wrapMinutes(localMinutes - selectedPoint.lng * 4 - equationOfTime(day))
+function utcFromLocalSolarMinutes(localMinutes: number, day = dayNo.value) {
+  return wrapMinutes(localMinutes - selectedPoint.lng * 4 - equationOfTime(Math.floor(day)))
 }
 
 function visualOrbitDay() {
-  const baseDay = playing.value ? autoOrbitDay : dayNo.value
-  // 公转日期进度跟随界面展示的“地方太阳时”，不是 UTC。
-  // 否则北京这种东经点位会在 UTC 跨日时，也就是地方太阳时早上 7 点多就提前加一天。
-  return baseDay + runtimeLocalSolarMinutes(baseDay) / 1440
+  return autoOrbitDay
 }
 
-function dateFromDay(day: number) {
-  // 小数日没有真正跨过 24:00 前，仍然属于当天；不能 round，round 会在中午后提前切到下一天。
-  const safeDay = clamp(Math.floor(day), 1, 365)
-  return new Date(Date.UTC(dateObj.value.getUTCFullYear(), 0, safeDay))
+function sunLongitudeAtDay(day: number) {
+  const theta = orbitThetaByDay(day)
+  // 太阳方向变换到倾斜地轴坐标系；与 Three.js 场景的经度约定一致。
+  return Math.atan2(Math.sin(theta), -Math.cos(theta) * Math.cos(AXIAL_TILT_ROTATION))
+}
+
+function syncTimeFromMotion() {
+  const greenwichSolarMinutes = solarMinutesFromRotation(sunLongitudeAtDay(autoOrbitDay), runtimeSpinRadians)
+  runtimeUtcMinutes = wrapMinutes(greenwichSolarMinutes - equationOfTime(dayNo.value))
+  utcMinutes.value = runtimeUtcMinutes
+}
+
+function cancelOrbitTransition() {
+  orbitTweenToken++
+  tweenOrbitVisualDay = null
+  suppressSceneUpdate = false
+}
+
+function toggleMotion(motion: 'rotation' | 'revolution') {
+  cancelOrbitTransition()
+  const enabled = motion === 'rotation' ? rotationPlaying : revolutionPlaying
+  enabled.value = !enabled.value
+}
+
+function toggleAllMotion() {
+  cancelOrbitTransition()
+  playing.value = !playing.value
 }
 
 function initEarthScene() {
@@ -1022,7 +1083,7 @@ function updateEarthScene() {
   const selected = latLngToVector(selectedPoint.lat, selectedPoint.lng, EARTH_R * 1.012)
   globeLayer.add(createMarker(selected, 0x38e8ff, selectedPoint.name))
 
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  updateAnimatedOrbitFrame(visualOrbitDay())
   updateControlsTarget()
 }
 
@@ -1343,7 +1404,7 @@ function updateDynamicSubsolar(earthPos: THREE.Vector3, earthToSunWorld: THREE.V
 
   dynamicSubsolarLabel.position.copy(subsolarWorld.clone().add(normal.clone().multiplyScalar(0.14)))
 }
-function updateAnimatedOrbitFrame(day: number, utc = runtimeUtcMinutes) {
+function updateAnimatedOrbitFrame(day: number) {
   if (!earthSystem || !tiltGroup || !spinGroup || !earthMaterial || !animatedOrbitLayer) return
 
   ensureAnimatedOrbitObjects()
@@ -1357,18 +1418,7 @@ function updateAnimatedOrbitFrame(day: number, utc = runtimeUtcMinutes) {
   // 北半球夏至日，北极圈应朝向太阳；冬至日应背向太阳。
   tiltGroup.rotation.z = AXIAL_TILT_ROTATION
 
-  // 自转每帧执行，并按太阳直射经度对齐昼夜面。
-  const frameSolar = calcSolarData({
-    date: dateFromDay(day),
-    utcMinutes: utc,
-    lat: selectedPoint.lat,
-    lng: selectedPoint.lng,
-  })
-
-  const invTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -AXIAL_TILT_ROTATION)
-  const sunInTiltLocal = earthToSunWorld.clone().applyQuaternion(invTilt).normalize()
-  const sunLngInTiltLocal = Math.atan2(-sunInTiltLocal.z, sunInTiltLocal.x) * RAD
-  spinGroup.rotation.y = (sunLngInTiltLocal - frameSolar.subsolarLng) * DEG
+  spinGroup.rotation.y = runtimeSpinRadians
 
   earthMaterial.uniforms.sunDir!.value.copy(earthToSunWorld)
   earthMaterial.uniforms.lightIntensity!.value = lightIntensity.value
@@ -2209,14 +2259,11 @@ function getEarthWorldPosition(day = visualOrbitDay()) {
 }
 
 function normalizeVisualDay(day: number) {
-  let result = day
-  while (result < 1) result += 365
-  while (result > 366) result -= 365
-  return result
+  return wrapOrbitDay(day)
 }
 
 function nearestVisualDayTarget(fromDay: number, targetDay: number) {
-  let target = targetDay + runtimeUtcMinutes / 1440
+  let target = targetDay
   while (target - fromDay > 182.5) target -= 365
   while (target - fromDay < -182.5) target += 365
   return target
@@ -2236,6 +2283,9 @@ function animateOrbitToDay(targetDay: number, onComplete?: () => void) {
     const t = clamp((performance.now() - startTime) / duration, 0, 1)
     const k = easeInOutCubic(t)
     tweenOrbitVisualDay = normalizeVisualDay(startDay + (endDay - startDay) * k)
+    autoOrbitDay = tweenOrbitVisualDay
+    setDateByDay(Math.floor(autoOrbitDay), false)
+    syncTimeFromMotion()
 
     if (focusCenter.value === 'earth' && earthControls && earthCamera) {
       const currentEarthPos = getEarthWorldPosition(tweenOrbitVisualDay)
@@ -2262,25 +2312,19 @@ function animate(now: number) {
   lastTime = now
 
   if (playing.value) {
-    // 公转日期由“地方太阳时”决定：界面上的自转时间从 23:59 走到 00:00，才增加一天。
-    // 不能用 UTC 跨日判断，否则北京会在 UTC 00:00，也就是地方太阳时早上 7 点多提前加一天。
-    const addMinutes = dt * 6 * playSpeed.value
-    const currentLocalMinutes = runtimeLocalSolarMinutes(autoOrbitDay)
-    const nextLocalRaw = currentLocalMinutes + addMinutes
-    const passedDays = Math.floor(nextLocalRaw / 1440)
-    const nextLocalMinutes = wrapMinutes(nextLocalRaw)
-
-    if (passedDays > 0) {
-      autoOrbitDay += passedDays
-      while (autoOrbitDay > 365) autoOrbitDay -= 365
-      setDateByDay(Math.floor(autoOrbitDay), false)
-    }
-
-    runtimeUtcMinutes = utcFromLocalSolarMinutes(nextLocalMinutes, autoOrbitDay)
-    utcMinutes.value = runtimeUtcMinutes
-    updateAnimatedOrbitFrame(autoOrbitDay + nextLocalMinutes / 1440, runtimeUtcMinutes)
+    const next = advanceEarthMotion(
+      { orbitDay: autoOrbitDay, spinRadians: runtimeSpinRadians },
+      (dt * 6 * playSpeed.value) / 1440,
+      { rotation: rotationPlaying.value, revolution: revolutionPlaying.value },
+      revolutionMultiplier.value,
+    )
+    autoOrbitDay = next.orbitDay
+    runtimeSpinRadians = next.spinRadians
+    setDateByDay(Math.floor(autoOrbitDay), false)
+    syncTimeFromMotion()
+    updateAnimatedOrbitFrame(autoOrbitDay)
   } else {
-    updateAnimatedOrbitFrame(tweenOrbitVisualDay ?? visualOrbitDay(), runtimeUtcMinutes)
+    updateAnimatedOrbitFrame(tweenOrbitVisualDay ?? visualOrbitDay())
   }
 
   earthControls?.update()
@@ -2439,25 +2483,31 @@ function isTermActive(term: Term) {
 }
 
 function setLocalSolarTime(hour: number) {
+  cancelOrbitTransition()
+  rotationPlaying.value = false
   localSolarMinutes.value = clamp(hour, 0, 23.999) * 60
   runtimeUtcMinutes = utcMinutes.value
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  updateAnimatedOrbitFrame(visualOrbitDay())
 }
 
 function jumpToSunrise() {
   const dayInfo = dayLengthInfo(selectedPoint.lat, solar.value.declination)
   if (dayInfo.type !== 'normal') return
+  cancelOrbitTransition()
+  rotationPlaying.value = false
   localSolarMinutes.value = 720 - dayInfo.h0 * 4
   runtimeUtcMinutes = utcMinutes.value
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  updateAnimatedOrbitFrame(visualOrbitDay())
 }
 
 function jumpToSunset() {
   const dayInfo = dayLengthInfo(selectedPoint.lat, solar.value.declination)
   if (dayInfo.type !== 'normal') return
+  cancelOrbitTransition()
+  rotationPlaying.value = false
   localSolarMinutes.value = 720 + dayInfo.h0 * 4
   runtimeUtcMinutes = utcMinutes.value
-  updateAnimatedOrbitFrame(visualOrbitDay(), runtimeUtcMinutes)
+  updateAnimatedOrbitFrame(visualOrbitDay())
 }
 
 function applyLessonPreset(key: LessonPresetKey) {
@@ -2496,7 +2546,7 @@ function applyLessonPreset(key: LessonPresetKey) {
 
 function setTerm(term: Term) {
   const targetDay = dayOfYear(new Date(`${term.date}T00:00:00Z`))
-  playing.value = false
+  revolutionPlaying.value = false
   suppressSceneUpdate = true
 
   animateOrbitToDay(targetDay, () => {
@@ -2509,15 +2559,17 @@ function setTerm(term: Term) {
 }
 
 function setDateByDay(day: number, syncAuto = true) {
+  if (syncAuto) {
+    cancelOrbitTransition()
+    revolutionPlaying.value = false
+  }
   const safeDay = clamp(day, 1, 365)
   const date = new Date(Date.UTC(dateObj.value.getUTCFullYear(), 0, safeDay))
   dateValue.value = date.toISOString().slice(0, 10)
 
   if (syncAuto) {
     autoOrbitDay = safeDay
-    // 手动拖动公转日期时，回到当天 0 点。
-    localSolarMinutes.value = 0
-    runtimeUtcMinutes = utcMinutes.value
+    syncTimeFromMotion()
     updateEarthScene()
   }
 }
@@ -2562,7 +2614,8 @@ function resetAll() {
   autoOrbitDay = 172
   localSolarMinutes.value = 0
   runtimeUtcMinutes = utcMinutes.value
-  playSpeed.value = 10
+  playSpeed.value = DEFAULT_PLAY_SPEED
+  revolutionMultiplier.value = DEFAULT_REVOLUTION_MULTIPLIER
   lightIntensity.value = 1.25
   nightBrightness.value = 1.55
   cityLightStrength.value = 2.45
@@ -3101,6 +3154,11 @@ function clamp(value: number, min: number, max: number) {
 </script>
 
 <style scoped>
+.motion-controls { margin-bottom: 8px; }
+.motion-hint { margin: 0 0 12px; color: #a7c0d3; font-size: 11px; line-height: 1.6; }
+.motion-hint--reverse { padding: 8px 10px; border: 1px solid rgba(255, 209, 102, 0.35); border-radius: 8px; background: rgba(255, 209, 102, 0.08); color: #ffe4a3; }
+.motion-hint--reverse strong { display: block; margin-bottom: 3px; color: #ffd166; }
+.orbit-speed-hint { margin: 4px 0 0; color: #a7c0d3; font-size: 10px; line-height: 1.5; }
 .earth-orbit-lab {
   --cyan: #38e8ff;
   --cyan2: #16d9e3;
