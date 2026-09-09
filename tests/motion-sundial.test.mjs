@@ -24,8 +24,9 @@ async function loadTs(path) {
 }
 
 const { advanceEarthMotion, rotationFromSolarMinutes, solarMinutesFromRotation } = await loadTs('../src/utils/earthMotion.ts')
-const { equatorialShadow, polarAxis, solarPathDirection, solarAltitudeGuide, sundialReadingNotice } = await loadTs('../src/utils/sundial.ts')
+const { equatorialShadow, polarAxis, solarPathDirection, solarAltitudeGuide, sundialGroundPosition, sundialEdgeLight, sundialReadingNotice } = await loadTs('../src/utils/sundial.ts')
 const { createEquatorialSundial } = await loadTs('../src/scene/createEquatorialSundial.ts')
+const { createSundialAlignmentGuide } = await loadTs('../src/scene/createSundialAlignmentGuide.ts')
 const { southFacingSolarCameraPosition, southFacingSolarCameraTarget } = await loadTs('../src/utils/solarView.ts')
 const near = (a, b, tolerance = 1e-9) => assert.ok(Math.abs(a - b) < tolerance, `${a} ≠ ${b}`)
 
@@ -108,15 +109,15 @@ function shadowAt(latitude, declination, hour) {
   return equatorialShadow(latitude, altitude, azimuth, 2, 1.3)
 }
 
-test('默认北侧视角正对北京、上海夏季受光的晷面和针影', () => {
-  const dialCenter = new Vector3(0, 0.08 + 2.35 * 0.7, 0)
+test('移动后默认北侧视角仍可清楚看到北京、上海、厦门夏季受光的晷面', () => {
   for (const mode of ['normal', 'compact', 'veryCompact']) {
-    const towardCamera = southFacingSolarCameraPosition(mode).sub(dialCenter).normalize()
-    for (const latitude of [39.9, 31.23]) {
+    for (const latitude of [39.9, 31.23, 24.48]) {
+      const dialCenter = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08).add(new Vector3(0, 2.35 * 0.7, 0))
+      const towardCamera = southFacingSolarCameraPosition(mode).sub(dialCenter).normalize()
       const shadow = shadowAt(latitude, 23.44, 12)
       assert.equal(shadow.status, 'readable')
       const litFaceNormal = polarAxis(latitude).multiplyScalar(shadow.face)
-      assert.ok(litFaceNormal.dot(towardCamera) > 0.95, '受光刻度面应接近正对相机，便于读数')
+      assert.ok(litFaceNormal.dot(towardCamera) > 0.9, '从正面观察的夹角应小于 26°，便于读数')
     }
   }
 })
@@ -139,7 +140,91 @@ test('晷针投影落在对应时刻的刻度，南北半球、双面上午下�
   }
 })
 test('春秋分平行入射不生成伪针影，赤道正午也不例外', () => {
-  for (const latitude of [-33.87, 0, 39.9]) assert.equal(shadowAt(latitude, 0, 12).status, 'parallel')
+  for (const latitude of [-33.87, 0, 24.48, 39.9]) {
+    for (const hour of [7, 9, 12, 15, 17]) assert.equal(shadowAt(latitude, 0, hour).status, 'parallel')
+  }
+})
+
+test('晷面中心与春秋分整条轨迹共面，而非偏向冬至轨迹平面', () => {
+  for (const latitude of [-69.65, -33.87, 0, 24.48, 31.23, 39.9, 66.56, 69.65]) {
+    const position = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08)
+    const center = position.clone().add(new Vector3(0, 2.35 * 0.7, 0))
+    const normal = polarAxis(latitude)
+    near(center.dot(normal), 0)
+    for (const hour of [6, 9, 12, 15, 18]) {
+      const onPath = solarPathDirection(latitude, 0, hour).multiplyScalar(7.6)
+      near(onPath.sub(center).dot(normal), 0)
+    }
+    near(position.y, 0.08)
+  }
+})
+
+test('极高纬度保留平行展示，日晷底座不移出场地或埋入地面', () => {
+  for (const latitude of [-90, -89.9, 66.56, 69.65, 89.9, 90]) {
+    const position = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08)
+    assert.ok(Math.hypot(position.x, position.z) + 1.75 < 7.4)
+    near(position.y, 0.08)
+  }
+})
+
+test('春秋分示意光线与真实太阳光平行，止于迎光盘缘，日出前和其他季节不显示', () => {
+  for (const latitude of [-33.87, 0, 24.48, 39.9, 69.65]) {
+    const center = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08).add(new Vector3(0, 2.35 * 0.7, 0))
+    for (const hour of [7, 9, 12, 15, 17]) {
+      const sun = solarPathDirection(latitude, 0, hour)
+      const altitude = Math.asin(sun.y) * 180 / Math.PI
+      const azimuth = Math.atan2(-sun.x, sun.z) * 180 / Math.PI
+      const ray = sundialEdgeLight(latitude, altitude, azimuth, center, 1.4)
+      assert.ok(ray)
+      near(ray.edge.distanceTo(center), 1.4)
+      near(ray.edge.clone().sub(center).dot(polarAxis(latitude)), 0)
+      near(ray.start.clone().sub(ray.edge).normalize().dot(sun), 1)
+      near(ray.direction.dot(sun), -1)
+      assert.equal(shadowAt(latitude, 0, hour).endpoint, null)
+    }
+    assert.equal(sundialEdgeLight(latitude, -5, 180, center, 1.4), null)
+    const summerSun = solarPathDirection(latitude, 23.44, 12)
+    assert.equal(sundialEdgeLight(latitude, Math.asin(summerSun.y) * 180 / Math.PI, Math.atan2(-summerSun.x, summerSun.z) * 180 / Math.PI, center, 1.4), null)
+  }
+})
+
+test('实际辅助平面包含整条春秋分轨迹，并与移动后的日晷刻度面平行', () => {
+  const previousDocument = globalThis.document
+  const context = new Proxy({}, { get: (target, key) => target[key] ?? (() => {}) })
+  globalThis.document = { createElement: () => ({ getContext: () => context }) }
+  const guide = createSundialAlignmentGuide(7.6, 1.4)
+  let model
+  try {
+    model = createEquatorialSundial({ capabilities: { getMaxAnisotropy: () => 1 } })
+    for (const latitude of [-89.9, -33.87, 0, 24.48, 39.9, 69.65, 89.9]) {
+      model.group.position.copy(sundialGroundPosition(latitude, 0.08 + model.centerHeight, 7.4, 1.75, 0.08))
+      model.update(latitude, 90 - Math.abs(latitude), latitude < 0 ? 0 : 180)
+      const center = model.getCenter()
+      guide.update(latitude, center, 90 - Math.abs(latitude), latitude < 0 ? 0 : 180)
+      guide.group.updateMatrixWorld(true)
+      const pathPlane = guide.group.getObjectByName('equinox-path-plane')
+      const dialPlane = guide.group.getObjectByName('dial-plane-extension')
+      const dial = model.group.getObjectByName('equatorial-dial-face')
+      const pathNormal = new Vector3(0, 0, 1).transformDirection(pathPlane.matrixWorld)
+      const dialNormal = new Vector3(0, 0, 1).transformDirection(dial.matrixWorld)
+      const guideNormal = new Vector3(0, 0, 1).transformDirection(dialPlane.matrixWorld)
+      near(pathNormal.dot(dialNormal), 1)
+      near(guideNormal.dot(dialNormal), 1)
+      near(dialPlane.position.distanceTo(center), 0)
+      if (Math.abs(latitude) <= 69.65) {
+        near(center.dot(pathNormal), 0)
+        for (const point of [new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(-1, -1, 0)]) {
+          near(point.applyMatrix4(dial.matrixWorld).dot(pathNormal), 0)
+        }
+      }
+      for (const hour of [6, 9, 12, 15, 18]) near(solarPathDirection(latitude, 0, hour).dot(pathNormal), 0)
+    }
+  } finally {
+    model?.dispose()
+    guide.dispose()
+    if (previousDocument === undefined) delete globalThis.document
+    else globalThis.document = previousDocument
+  }
 })
 test('夜晚与极夜隐藏阴影，极昼午夜仍能读数', () => {
   assert.equal(shadowAt(39.9, 23.44, 0).status, 'night')

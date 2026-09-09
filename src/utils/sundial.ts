@@ -36,6 +36,23 @@ export function solarPathDirection(latitude: number, declination: number, hour: 
   )
 }
 
+/** 让晷面中心满足赤道平面方程 y·sinφ + z·cosφ = 0，而非投到轨迹顶点下方。 */
+export function sundialGroundPosition(latitude: number, dialCenterHeight: number, groundRadius: number, footprintRadius: number, groundY: number) {
+  const alignedZ = -dialCenterHeight * Math.tan(latitude * DEG)
+  // 接近两极时，水平晷面不可能在保持离地高度的同时与地平轨迹共面；保留场地内的平行展示。
+  const limit = Math.max(0, groundRadius - footprintRadius - 0.2)
+  return new Vector3(0, groundY, Math.max(-limit, Math.min(limit, alignedZ)))
+}
+
+/** 春秋分平行光的入射示意止于迎光盘缘，不在晷面上画出假的针影。 */
+export function sundialEdgeLight(latitude: number, altitude: number, azimuth: number, center: Vector3, radius: number) {
+  const illumination = sundialIllumination(latitude, altitude, azimuth)
+  if (illumination.status !== 'parallel') return null
+  const alongFace = illumination.sun.clone().addScaledVector(illumination.normal, -illumination.incidence).normalize()
+  const edge = center.clone().addScaledVector(alongFace, radius)
+  return { edge, start: edge.clone().addScaledVector(illumination.sun, 2), direction: illumination.sun.clone().negate() }
+}
+
 export function sundialIllumination(latitude: number, altitude: number, azimuth: number) {
   const sun = sunDirection(altitude, azimuth)
   const normal = polarAxis(latitude)
@@ -52,8 +69,8 @@ export function sundialReadingNotice(latitude: number, altitude: number, azimuth
     detail: '太阳在地平线或以下，没有直射阳光形成可读针影。',
   }
   if (status === 'parallel') return {
-    status, title: '春秋分前后：针影不清晰',
-    detail: '阳光近乎平行于晷面，暂时无法形成清晰针影。',
+    status, title: '春秋分：阳光掠过晷面边缘',
+    detail: '阳光近乎平行于晷面，盘面上无可读针影；地面上的影子仍可能存在。',
   }
   const faceName = face > 0 ? '朝北天极面' : '朝南天极面'
   const surface = Math.abs(latitude) < 0.01 ? '竖直晷面' : latitude * face > 0 ? '上表面' : '下表面'

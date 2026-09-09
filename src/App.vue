@@ -548,6 +548,7 @@ const terms: Term[] = [
 const cities: City[] = [
   { key: 'beijing', name: '北京', lat: 39.9, lng: 116.4 },
   { key: 'shanghai', name: '上海', lat: 31.23, lng: 121.47 },
+  { key: 'xiamen', name: '厦门', lat: 24.48, lng: 118.08 },
   { key: 'guangzhou', name: '广州', lat: 23.13, lng: 113.26 },
   { key: 'singapore', name: '新加坡', lat: 1.35, lng: 103.82 },
   { key: 'sydney', name: '悉尼', lat: -33.87, lng: 151.21 },
@@ -1850,9 +1851,13 @@ function createHeatZones() {
     )
   })
   ;[-66.56, -23.44, 0, 23.44, 66.56].forEach(lat => {
+    if (lat !== 0) {
+      group.add(dashedLatitudeLine(lat, zoneBoundaryRadius, 0xf8fbff, 0.78))
+      return
+    }
     const points: THREE.Vector3[] = []
     for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, zoneBoundaryRadius))
-    group.add(line(points, lat === 0 ? 0xffffff : 0xf8fbff, lat === 0 ? 0.95 : 0.78))
+    group.add(line(points, 0xffffff, 0.95))
   })
 
   return group
@@ -2101,9 +2106,7 @@ function createTropics() {
   ]
 
   list.forEach(item => {
-    const points: THREE.Vector3[] = []
-    for (let lng = -180; lng <= 180; lng += 4) points.push(latLngToVector(item.lat, lng, EARTH_R * 1.035))
-    group.add(line(points, item.color, 0.56))
+    group.add(dashedLatitudeLine(item.lat, EARTH_R * 1.035, item.color, 0.56))
     group.add(labelSprite(item.text, `#${item.color.toString(16).padStart(6, '0')}`, 0.16, latLngToVector(item.lat, 130, EARTH_R * 1.15)))
   })
   return group
@@ -2811,6 +2814,22 @@ function createStarField() {
 
 function line(points: THREE.Vector3[], color: number, opacity = 1) {
   return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color, transparent: true, opacity }))
+}
+
+function dashedLatitudeLine(lat: number, radius: number, color: number, opacity: number) {
+  const points: THREE.Vector3[] = []
+  for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, radius))
+  const material = new THREE.LineDashedMaterial({ color, transparent: true, opacity })
+  const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material)
+  ring.computeLineDistances()
+
+  // 整圈使用整数段虚线，让接缝闭合，并保持五带边界与回归线、极圈的间隙对齐。
+  const distances = ring.geometry.getAttribute('lineDistance')
+  const dashCount = Math.abs(lat) > 45 ? 24 : 48
+  const period = distances.getX(distances.count - 1) / dashCount
+  material.dashSize = period * 0.6
+  material.gapSize = period * 0.4
+  return ring
 }
 
 function lineNoDepth(points: THREE.Vector3[], color: number, opacity = 1) {

@@ -2,6 +2,14 @@
   <div ref="wrapRef" class="sun-lite">
     <div ref="canvasWrapRef" class="canvas-wrap"></div>
 
+    <div v-if="props.sceneObject === 'sundial'" class="sundial-guide-control">
+      <button type="button" :aria-pressed="showSundialGuide" @click="showSundialGuide = !showSundialGuide">
+        {{ showSundialGuide ? '收起' : '显示' }}晷面平行示意
+      </button>
+      <p v-if="showSundialGuide">紫色示意：春秋分轨迹所在平面 ∥ 晷面</p>
+      <p v-if="showSundialGuide && sundialNotice.status === 'parallel'">橙色光线：沿晷面边缘掠过</p>
+    </div>
+
     <!--     <div class="legend-panel">
       <div class="legend-title">图例</div>
       <div><i class="dot yellow"></i> 当前太阳</div>
@@ -47,8 +55,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createEquatorialSundial } from './scene/createEquatorialSundial'
+import { createSundialAlignmentGuide } from './scene/createSundialAlignmentGuide'
 import { southFacingSolarCameraPosition, southFacingSolarCameraTarget } from './utils/solarView'
-import { solarAltitudeGuide, sundialReadingNotice, sunDirection } from './utils/sundial'
+import { solarAltitudeGuide, sundialGroundPosition, sundialReadingNotice, sunDirection } from './utils/sundial'
 
 type SolarMetrics = {
   declination: number
@@ -104,6 +113,7 @@ const props = defineProps<{
 
 const canvasWrapRef = ref<HTMLDivElement | null>(null)
 const wrapRef = ref<HTMLDivElement | null>(null)
+const showSundialGuide = ref(true)
 
 const SKY_RADIUS = 7.6
 const GROUND_RADIUS = 7.4
@@ -163,6 +173,8 @@ let sunGlow: THREE.Sprite
 let lightRay: THREE.Line
 let hemisphereDome: THREE.Mesh
 let sundialModel: ReturnType<typeof createEquatorialSundial> | null = null
+let sundialGuide: ReturnType<typeof createSundialAlignmentGuide> | null = null
+const treeMeshes: THREE.Mesh[] = []
 
 const streetLightItems: StreetLightItem[] = []
 const windowLightItems: WindowLightItem[] = []
@@ -183,6 +195,10 @@ let lastViewportMode = ''
 
 const runtimeMetrics = computed(() => buildRuntimeMetricsFromProps())
 const sundialNotice = computed(() => sundialReadingNotice(props.latitude, props.altitude, props.azimuth))
+
+watch(showSundialGuide, visible => {
+  if (sundialGuide) sundialGuide.group.visible = visible
+})
 
 const sceneTitle = computed(() => {
   if (state.dayOfYear >= 160 && state.dayOfYear <= 185) return '6月夏至前后 · 北半球路径高、昼长较长'
@@ -368,12 +384,16 @@ function createCityScene() {
   trafficLightItems.length = 0
   cityRoadMaterials.length = 0
   cityClockItems.length = 0
+  treeMeshes.length = 0
 
   // 日晷场景保留草地、树木和观测点，移除街道及路灯、交通灯等城市设施。
   if (props.sceneObject === 'sundial') {
     sundialModel = createEquatorialSundial(renderer)
     sundialModel.group.position.y = GROUND_SURFACE_Y
     schoolGroup.add(sundialModel.group)
+    sundialGuide = createSundialAlignmentGuide(SKY_RADIUS, sundialModel.radius)
+    sundialGuide.group.visible = showSundialGuide.value
+    scene.add(sundialGuide.group)
   } else {
     createCityRoadNetwork()
     createCityBlocks()
@@ -622,6 +642,7 @@ function createTree(x: number, z: number, size: number) {
   crown.position.set(x, GROUND_SURFACE_Y + size * 1.2, z)
   applyMeshShadowSettings(crown)
   schoolGroup.add(crown)
+  treeMeshes.push(trunk, crown)
 }
 
 function createCityTimeElements() {
@@ -936,14 +957,15 @@ function rebuildSolarPaths() {
     const mid = points[Math.floor(points.length / 2)]!
     const textColor = def.color === 0xffffff ? '#ffffff' : def.color === 0xffd166 ? '#ffe28a' : def.color === 0x3687ff ? '#9fc0ff' : '#8af6ff'
     pathGroup.add(
-      createSpriteText(
+      createLabelSpriteText(
         def.name,
         textColor,
         mid
           .clone()
           .multiplyScalar(1.035)
-          .add(new THREE.Vector3(0, index === 0 ? 0.18 : 0, 0)),
-        index === 0 ? 0.22 : 0.18,
+          .add(new THREE.Vector3(0, index === 0 ? 0.36 : 0, 0)),
+        28,
+        index === 0 ? 0.42 : 0.38,
       ),
     )
 
@@ -992,7 +1014,15 @@ function updateSceneBySolar(metrics: SolarMetrics) {
   updateAltitudeAngleGauge(metrics)
   syncThreeJsSunShadow(metrics)
   updateSkyByTime(metrics)
-  sundialModel?.update(state.latitude, metrics.altitude, metrics.azimuth)
+  if (sundialModel) {
+    sundialModel.group.position.copy(sundialGroundPosition(state.latitude, GROUND_SURFACE_Y + sundialModel.centerHeight, GROUND_RADIUS, 1.75, GROUND_SURFACE_Y))
+    sundialModel.update(state.latitude, metrics.altitude, metrics.azimuth)
+    sundialGuide?.update(state.latitude, sundialModel.getCenter(), metrics.altitude, metrics.azimuth)
+    // 换城市后重新留出底座和支架的空间，避免树木穿过日晷。
+    treeMeshes.forEach(tree => {
+      tree.visible = Math.hypot(tree.position.x, tree.position.z - sundialModel!.group.position.z) > 1.75
+    })
+  }
 }
 
 function updateLightRay(sunPos: THREE.Vector3, visible: boolean) {
@@ -1739,6 +1769,8 @@ function animate() {
 }
 
 function disposeScene() {
+  sundialGuide?.dispose()
+  sundialGuide = null
   sundialModel?.dispose()
   sundialModel = null
   if (resizeRaf) {
@@ -1847,6 +1879,40 @@ function disposeScene() {
 }
 .dot.ray {
   background: #fff4bd;
+}
+
+.sundial-guide-control {
+  position: absolute;
+  top: 76px;
+  left: 12px;
+  z-index: 6;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px;
+  border: 1px solid rgba(191, 164, 238, 0.5);
+  border-radius: 10px;
+  background: rgba(4, 13, 28, 0.78);
+  color: #f0e5ff;
+  font-size: 11px;
+}
+
+.sundial-guide-control button {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: #f0e5ff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sundial-guide-control button:focus-visible {
+  outline: 2px solid #ffd166;
+  outline-offset: 3px;
+}
+
+.sundial-guide-control p {
+  margin: 5px 0 0;
+  line-height: 1.5;
 }
 
 .mini-hud {

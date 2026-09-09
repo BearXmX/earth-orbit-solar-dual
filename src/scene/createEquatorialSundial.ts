@@ -83,6 +83,7 @@ export function createEquatorialSundial(renderer: THREE.WebGLRenderer) {
 
   function createDial() {
     dial = new THREE.Group()
+    dial.name = 'equatorial-dial-face'
     dial.position.copy(CENTER)
     group.add(dial)
     const edge = new THREE.Mesh(new THREE.CylinderGeometry(DIAL_RADIUS, DIAL_RADIUS, 0.11, 128), new THREE.MeshStandardMaterial({ color: 0xb99b5c, metalness: 0.55, roughness: 0.38 }))
@@ -173,5 +174,10 @@ export function createEquatorialSundial(renderer: THREE.WebGLRenderer) {
     group.removeFromParent()
   }
 
-  return { group, update, dispose }
+  return {
+    group, update, dispose,
+    radius: DIAL_RADIUS * group.scale.x,
+    centerHeight: CENTER.y * group.scale.y,
+    getCenter: () => dial.getWorldPosition(new THREE.Vector3()),
+  }
 }
