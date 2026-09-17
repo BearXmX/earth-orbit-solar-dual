@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/motion-sundial.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "dev": "vite --host",
-    "build:standard": "vite build --mode standard",
+    "dev:city": "vite --host --mode city",
     "preview": "vite preview",
+    "build:standard": "vite build --mode standard",
     "build:advanced": "vite build --mode advanced",
+    "build:city": "vite build --mode city",
     "type-check": "vue-tsc --build"
   },
   "dependencies": {

@@ -6,7 +6,7 @@
       <button type="button" :aria-pressed="showSundialGuide" @click="showSundialGuide = !showSundialGuide">
         {{ showSundialGuide ? '收起' : '显示' }}晷面平行示意
       </button>
-      <p v-if="showSundialGuide">紫色示意：春秋分轨迹所在平面 ∥ 晷面</p>
+      <p v-if="showSundialGuide">紫色示意：{{ isZeroTilt ? '全年' : '春秋分' }}轨迹所在平面 ∥ 晷面</p>
       <p v-if="showSundialGuide && sundialNotice.status === 'parallel'">橙色光线：沿晷面边缘掠过</p>
     </div>
 
@@ -14,11 +14,11 @@
       <div class="legend-title">图例</div>
       <div><i class="dot yellow"></i> 当前太阳</div>
       <div><i class="dot current"></i> 当前日期路径</div>
-      <div><i class="dot blue"></i> 夏至路径</div>
+      <div><i class="dot blue"></i> 6月夏至路径</div>
       <div><i class="dot white"></i> 春秋分路径</div>
-      <div><i class="dot cyan"></i> 冬至路径</div>
-      <div><i class="dot shadow"></i> 建筑原生阴影</div>
-      <div><i class="dot ray"></i> 太阳直射光线</div>
+      <div><i class="dot cyan"></i> 12月冬至路径</div>
+      <div><i class="dot shadow"></i> 场景物体阴影</div>
+      <div><i class="dot ray"></i> 太阳光线</div>
     </div> -->
 
     <div class="mini-hud">
@@ -27,10 +27,10 @@
         <span>{{ sundialNotice.detail }}</span>
       </p>
       <div>
-        <span>太阳高度</span><b>{{ formatDeg(runtimeMetrics.altitude) }}</b>
+        <span title="太阳中心与当地地平面的夹角；地平线上方为正，下方为负。">太阳高度角</span><b>{{ formatSignedDegreesMinutes(runtimeMetrics.altitude) }}</b>
       </div>
       <div>
-        <span>太阳方位</span><b>{{ formatDeg(runtimeMetrics.azimuth) }}</b>
+        <span title="北为0°，东90°，南180°，西270°；极点以所选经线建立参考方向。">太阳方位角</span><b>{{ solarAzimuthText(runtimeMetrics.altitude, runtimeMetrics.azimuth) }}</b>
       </div>
       <div>
         <span>地方太阳时</span><b>{{ formatClock(runtimeMetrics.solarTime) }}</b>
@@ -56,8 +56,11 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createEquatorialSundial } from './scene/createEquatorialSundial'
 import { createSundialAlignmentGuide } from './scene/createSundialAlignmentGuide'
+import { createDayNightSky } from './scene/createDayNightSky'
+import { clearObjectChildren } from './scene/disposeSceneResources'
+import { AXIAL_TILT, formatSignedDegreesMinutes } from './utils/astronomy'
 import { southFacingSolarCameraPosition, southFacingSolarCameraTarget } from './utils/solarView'
-import { solarAltitudeGuide, sundialGroundPosition, sundialReadingNotice, sunDirection } from './utils/sundial'
+import { solarAltitudeGuide, solarAzimuthText, sundialGroundPosition, sundialReadingNotice, sunDirection } from './utils/sundial'
 
 type SolarMetrics = {
   declination: number
@@ -97,8 +100,9 @@ type CityClockItem = {
   lastKey?: string
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sceneObject?: 'city' | 'sundial'
+  axialTilt?: number
   latitude: number
   longitude: number
   dayOfYear: number
@@ -109,7 +113,11 @@ const props = defineProps<{
   sunriseText: string
   sunsetText: string
   dayLengthText: string
-}>()
+}>(), { axialTilt: AXIAL_TILT })
+
+const emit = defineEmits<{ ready: []; loadError: [message: string] }>()
+let mountedDisposed = false
+let sceneDisposed = false
 
 const canvasWrapRef = ref<HTMLDivElement | null>(null)
 const wrapRef = ref<HTMLDivElement | null>(null)
@@ -121,7 +129,7 @@ const GROUND_SURFACE_Y = 0.08
 // 与天球和太阳路径使用同一原点，避免有限距离的太阳标记引入视差。
 const OBSERVER_POINT = new THREE.Vector3(0, 0, 0)
 // 极昼/极夜临界点容差，与父组件保持一致，避免北极圈临界值被浮点误差误判。
-const POLAR_EPS = 0.0015
+const POLAR_EPS = 1e-10
 
 const BILLBOARD_BACK_CONFIG = {
   eyebrow: '敲代码做 HTML 互动课件',
@@ -162,8 +170,8 @@ let sunGroup: THREE.Group
 let rayGroup: THREE.Group
 let schoolGroup: THREE.Group
 let labelGroup: THREE.Group
-let skyDecorationGroup: THREE.Group
 let altitudeAngleGroup: THREE.Group
+let dayNightSky: ReturnType<typeof createDayNightSky> | null = null
 
 let ambientLight: THREE.AmbientLight
 let keyLight: THREE.DirectionalLight
@@ -171,10 +179,10 @@ let rimLight: THREE.DirectionalLight
 let sunMesh: THREE.Mesh
 let sunGlow: THREE.Sprite
 let lightRay: THREE.Line
-let hemisphereDome: THREE.Mesh
 let sundialModel: ReturnType<typeof createEquatorialSundial> | null = null
 let sundialGuide: ReturnType<typeof createSundialAlignmentGuide> | null = null
 const treeMeshes: THREE.Mesh[] = []
+const altitudeGaugeLabels = new Map<string, THREE.Sprite>()
 
 const streetLightItems: StreetLightItem[] = []
 const windowLightItems: WindowLightItem[] = []
@@ -191,28 +199,32 @@ let resizeRaf = 0
 let resizeTimer = 0
 let resizeFinalTimer = 0
 let pendingResizeForce = false
-let lastViewportMode = ''
+let lastCameraFitDistance = 0
 
 const runtimeMetrics = computed(() => buildRuntimeMetricsFromProps())
-const sundialNotice = computed(() => sundialReadingNotice(props.latitude, props.altitude, props.azimuth))
+const isZeroTilt = computed(() => Math.abs(props.axialTilt) < 1e-6)
+const sundialNotice = computed(() => {
+  const notice = sundialReadingNotice(props.latitude, props.altitude, props.azimuth)
+  if (isHorizonPath(props.latitude, props.declination)) return {
+    ...notice,
+    title: '太阳沿地平线运行',
+    detail: '太阳中心全天位于地平线上，属于昼夜临界情形；晷面无法形成可读针影。',
+  }
+  if (isZeroTilt.value && notice.status === 'parallel') return {
+    ...notice,
+    title: '黄赤交角 0°：全年沿晷面掠射',
+    detail: '全年太阳赤纬为 0°；白天阳光沿晷面边缘掠过，盘面上无可读针影，地面仍可能有影子。',
+  }
+  return notice
+})
 
 watch(showSundialGuide, visible => {
   if (sundialGuide) sundialGuide.group.visible = visible
 })
 
-const sceneTitle = computed(() => {
-  if (state.dayOfYear >= 160 && state.dayOfYear <= 185) return '6月夏至前后 · 北半球路径高、昼长较长'
-  if (state.dayOfYear >= 345 || state.dayOfYear <= 12) return '12月冬至前后 · 北半球路径低、昼长较短'
-  if (Math.abs(state.dayOfYear - 80) < 10 || Math.abs(state.dayOfYear - 266) < 10) return '春秋分前后 · 昼夜接近等长'
-  return '太阳周日视运动 · 路径随日期变化'
-})
-
-const sceneSubtitle = computed(
-  () => `纬度 ${formatDeg(state.latitude)} · 经度 ${formatDeg(state.longitude)} · 第 ${state.dayOfYear} 天 · 地方太阳时 ${formatClock(state.solarTime)}`,
-)
-
 watch(
   () => [
+    props.axialTilt,
     props.latitude,
     props.longitude,
     props.dayOfYear,
@@ -238,21 +250,32 @@ watch(
 
 onMounted(async () => {
   await nextTick()
-  initScene()
-  syncFromProps()
-  animate()
+  if (mountedDisposed) return
+  try {
+    initScene()
+    syncFromProps()
+    animate()
+    if (!mountedDisposed) emit('ready')
+  } catch (error) {
+    console.error(error)
+    disposeScene()
+    if (!mountedDisposed) emit('loadError', '太阳视运动场景初始化失败')
+  }
 })
 
 onBeforeUnmount(() => {
+  mountedDisposed = true
   cancelAnimationFrame(animationId)
   disposeScene()
 })
 
 function initScene() {
-  if (!canvasWrapRef.value) return
+  if (!canvasWrapRef.value) throw new Error('Solar scene canvas is unavailable')
 
   scene = new THREE.Scene()
-  scene.fog = new THREE.Fog(0x071427, 12.5, 32)
+  dayNightSky = createDayNightSky()
+  scene.fog = null
+  scene.add(dayNightSky.mesh)
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 160)
   camera.position.copy(southFacingSolarCameraPosition())
@@ -266,7 +289,7 @@ function initScene() {
   })
   renderer.setPixelRatio(safeRenderMode ? 1 : Math.min(window.devicePixelRatio, 1.5))
   renderer.setSize(Math.max(1, canvasWrapRef.value.clientWidth), Math.max(1, canvasWrapRef.value.clientHeight), true)
-  renderer.setClearColor(0x071427, 1)
+  renderer.setClearColor(0x080b11, 1)
   renderer.shadowMap.enabled = !safeRenderMode
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
@@ -323,10 +346,9 @@ function initScene() {
   rayGroup = new THREE.Group()
   schoolGroup = new THREE.Group()
   labelGroup = new THREE.Group()
-  skyDecorationGroup = new THREE.Group()
   altitudeAngleGroup = new THREE.Group()
 
-  scene.add(rootGroup, domeGroup, pathGroup, sunGroup, rayGroup, altitudeAngleGroup, schoolGroup, labelGroup, skyDecorationGroup)
+  scene.add(rootGroup, domeGroup, pathGroup, sunGroup, rayGroup, altitudeAngleGroup, schoolGroup, labelGroup)
 
   createGround()
   createCityScene()
@@ -334,7 +356,6 @@ function initScene() {
   createLabels()
   createSun()
   createLightRay()
-  createNightSkyDecorations()
 
   // v10：不要依赖 ResizeObserver 防抖。窗口拖拽时 ResizeObserver 触发节奏不稳定，
   // 容易和 WebGL setSize / 浏览器重排撞在一起导致闪烁。
@@ -346,7 +367,7 @@ function syncFromProps() {
   if (!scene) return
 
   // 当前太阳路径由父组件传入的 declination 驱动，避免父子组件各算一套赤纬导致不一致。
-  const pathKey = [Math.round(state.latitude * 10), state.dayOfYear, state.declination.toFixed(2)].join('-')
+  const pathKey = [Math.round(state.latitude * 10), state.dayOfYear, state.declination.toFixed(2), props.axialTilt].join('-')
   if (pathKey !== lastPathKey) {
     lastPathKey = pathKey
     rebuildSolarPaths()
@@ -826,12 +847,6 @@ function createCityObservationPoint() {
 }
 
 function createDome() {
-  hemisphereDome = new THREE.Mesh(
-    new THREE.SphereGeometry(SKY_RADIUS, 96, 32, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0x72d8ff, transparent: true, opacity: 0.06, side: THREE.BackSide, depthWrite: false }),
-  )
-  domeGroup.add(hemisphereDome)
-
   for (const alt of [15, 30, 45, 60, 75]) {
     const y = SKY_RADIUS * Math.sin(degToRad(alt))
     const r = SKY_RADIUS * Math.cos(degToRad(alt))
@@ -911,42 +926,21 @@ function createLightRay() {
   rayGroup.add(lightRay)
 }
 
-function createNightSkyDecorations() {
-  const starGeometry = new THREE.BufferGeometry()
-  const positions: number[] = []
-  for (let i = 0; i < 160; i++) {
-    const radius = SKY_RADIUS * (0.92 + Math.random() * 0.03)
-    const az = degToRad(Math.random() * 360)
-    const alt = degToRad(12 + Math.random() * 72)
-    positions.push(-Math.sin(az) * Math.cos(alt) * radius, Math.sin(alt) * radius, Math.cos(az) * Math.cos(alt) * radius)
-  }
-  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  const stars = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: 0xffffff, size: 0.035, transparent: true, opacity: 0 }))
-  skyDecorationGroup.add(stars)
-}
-
 function clearGroup(group: THREE.Group) {
-  while (group.children.length) {
-    const child = group.children.pop()!
-    child.traverse(obj => {
-      const mesh = obj as THREE.Mesh
-      if (mesh.geometry) mesh.geometry.dispose()
-      const material = mesh.material
-      if (Array.isArray(material)) material.forEach(item => item.dispose())
-      else material?.dispose?.()
-    })
-  }
+  clearObjectChildren(group, { retainRoot: scene })
 }
 
 function rebuildSolarPaths() {
   clearGroup(pathGroup)
   if (!layers.paths) return
 
-  const pathDefs = [
-    { declination: state.declination, name: `${state.dayOfYear}路径`, color: 0xffd166, opacity: 1, radius: 0.018 },
-    { declination: 23.44, name: '夏至路径', color: 0x3687ff, opacity: 0.78, radius: 0.011 },
+  const pathDefs = isZeroTilt.value ? [
+    { declination: 0, name: '全年路径（黄赤交角 0°）', color: 0xffd166, opacity: 1, radius: 0.018 },
+  ] : [
+    { declination: state.declination, name: `当日路径（第${state.dayOfYear}天）`, color: 0xffd166, opacity: 1, radius: 0.018 },
+    { declination: props.axialTilt, name: '6月夏至路径', color: 0x3687ff, opacity: 0.78, radius: 0.011 },
     { declination: 0, name: '春秋分路径', color: 0xffffff, opacity: 0.62, radius: 0.01 },
-    { declination: -23.44, name: '冬至路径', color: 0x45e8ff, opacity: 0.76, radius: 0.011 },
+    { declination: -props.axialTilt, name: '12月冬至路径', color: 0x45e8ff, opacity: 0.76, radius: 0.011 },
   ]
 
   pathDefs.forEach((def, index) => {
@@ -971,7 +965,7 @@ function rebuildSolarPaths() {
 
     if (index === 0) {
       const currentPathMetrics = computeSolarMetricsByDeclination(state.latitude, def.declination, 12)
-      if (!currentPathMetrics.polarType) {
+      if (!currentPathMetrics.polarType && !isHorizonPath(state.latitude, def.declination)) {
         const first = points[0]!
         const last = points[points.length - 1]!
         pathGroup.add(createSmallMarker(first, 0xffd166, '日出'))
@@ -981,19 +975,25 @@ function rebuildSolarPaths() {
   })
 }
 
+function isHorizonPath(latitude: number, declination: number) {
+  return Math.abs(Math.abs(latitude) - 90) < 1e-6 && Math.abs(declination) < 1e-6
+}
+
 function buildSunPathPoints(latitude: number, declination: number) {
   const m = computeSolarMetricsByDeclination(latitude, declination, 12)
   const points: THREE.Vector3[] = []
-  if (m.polarType === '极夜') return points
+  const horizonPath = isHorizonPath(latitude, declination)
+  if (m.polarType === '极夜' && !horizonPath) return points
 
-  const start = m.polarType === '极昼' ? 0 : m.sunrise
-  const end = m.polarType === '极昼' ? 24 : m.sunset
+  const fullDayPath = m.polarType === '极昼' || horizonPath
+  const start = fullDayPath ? 0 : m.sunrise
+  const end = fullDayPath ? 24 : m.sunset
   const steps = 180
 
   for (let i = 0; i <= steps; i++) {
     const t = start + ((end - start) * i) / steps
     const metrics = computeSolarMetricsByDeclination(latitude, declination, t)
-    if (metrics.altitude >= -0.1 || m.polarType === '极昼') points.push(solarToPosition(metrics, SKY_RADIUS))
+    if (metrics.altitude >= -0.1 || fullDayPath) points.push(solarToPosition(metrics, SKY_RADIUS))
   }
   return points
 }
@@ -1002,7 +1002,7 @@ function updateSceneBySolar(metrics: SolarMetrics) {
   if (!sunMesh || !sunGlow || !lightRay) return
 
   const sunPos = solarToPosition(metrics, SKY_RADIUS)
-  const isAbove = metrics.altitude > 0
+  const isAbove = metrics.altitude > 0 || isHorizonPath(state.latitude, metrics.declination)
 
   sunMesh.position.copy(sunPos)
   sunGlow.position.copy(sunPos)
@@ -1041,6 +1041,8 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
   // 很容易出现 WebGL 闪烁。拖拽期间保留上一帧辅助线，松手后再补绘。
   if (controlsInteracting) return
 
+  // Keep the three canvas labels alive; only the angle geometry is rebuilt.
+  altitudeGaugeLabels.forEach(label => label.removeFromParent())
   clearGroup(altitudeAngleGroup)
 
   // 太阳在地平线以下时不画夹角，避免视觉上穿过地面。
@@ -1048,21 +1050,21 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
 
   /**
    * 太阳高度角 h 的实时夹角演示：
-   * - 黄色长线：从天球观测原点指向太阳的直射光线；
+   * - 黄色长线：连接天球观测原点与太阳的光线；
    * - 白色基准线：从同一个夹角顶点出发，表示与地面平行的地平线方向；
    * - 半透明扇形 + 弧线：从白色基准线扫到黄色光线，实时表示 h。
    */
   const rayTarget = OBSERVER_POINT.clone()
   const { direction: sunDir, horizontal, sunPosition: sunPos } = solarAltitudeGuide(metrics.altitude, metrics.azimuth, SKY_RADIUS)
 
-  // 夹角顶点：放在观测点到太阳的直射光线上。白线和黄线都从这里开始，保证对接。
+  // 夹角顶点：放在观测点与太阳的连线上。白线和黄线都从这里开始，保证对接。
   const origin = rayTarget.clone().add(sunDir.clone().multiplyScalar(1.55))
   const radius = 1.48
 
   const horizonEnd = origin.clone().add(horizontal.clone().multiplyScalar(radius * 1.35))
   const sunEdge = origin.clone().add(sunDir.clone().multiplyScalar(radius * 1.18))
 
-  // 完整太阳直射光线：天球观测原点 -> 太阳，与日晷入射光平行。
+  // 完整太阳光线：连接天球观测原点与太阳，与日晷入射光平行。
   altitudeAngleGroup.add(makeTubeLine([rayTarget, sunPos], 0xffd166, 0.016, 0.96))
   altitudeAngleGroup.add(makeLine([rayTarget, sunPos], 0xfff4bd, 0.42))
 
@@ -1085,30 +1087,29 @@ function updateAltitudeAngleGauge(metrics: SolarMetrics) {
   vertex.position.copy(origin)
   altitudeAngleGroup.add(vertex)
 
-  altitudeAngleGroup.add(createSpriteText('地平线方向', '#e5e7eb', horizonEnd.clone().add(new THREE.Vector3(0, 0.12, 0)), 0.14))
-  altitudeAngleGroup.add(createSpriteText('太阳直射光线', '#ffd166', sunEdge.clone().add(new THREE.Vector3(0, 0.12, 0)), 0.14))
-
   const labelPos = origin
     .clone()
     .add(horizontal.clone().multiplyScalar(radius * 0.42))
     .add(new THREE.Vector3(0, radius * 0.26, 0))
 
-  altitudeAngleGroup.add(createSpriteText(`太阳高度角 h = ${formatDeg(metrics.altitude)}`, '#fff1b8', labelPos, 0.2))
+  // Put the numeric readout first so it keeps the closest position when labels would overlap.
+  altitudeAngleGroup.add(createAltitudeGaugeLabel(`h = ${formatSignedDegreesMinutes(metrics.altitude)}`, '#fff1b8', labelPos, true))
+  altitudeAngleGroup.add(createAltitudeGaugeLabel('地平线方向', '#e5e7eb', horizonEnd.clone().add(new THREE.Vector3(0, 0.12, 0))))
+  altitudeAngleGroup.add(createAltitudeGaugeLabel('太阳光线', '#ffd166', sunEdge.clone().add(new THREE.Vector3(0, 0.12, 0))))
+  updateAltitudeGaugeLabels()
 }
 
 function createAngleSector(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir: THREE.Vector3, radius: number, color: number, opacity = 0.18) {
   const steps = 36
   const positions: number[] = []
   const indices: number[] = []
-  const axis = new THREE.Vector3().crossVectors(fromDir, toDir)
-  if (axis.lengthSq() < 0.0001) axis.set(0, 1, 0)
-  axis.normalize()
-
-  const angle = fromDir.angleTo(toDir)
+  // Preserve the vertical solar plane even when the altitude is close to zero.
+  const rotation = new THREE.Quaternion().setFromUnitVectors(fromDir.clone().normalize(), toDir.clone().normalize())
+  const identity = new THREE.Quaternion()
   positions.push(origin.x, origin.y, origin.z)
 
   for (let i = 0; i <= steps; i++) {
-    const q = new THREE.Quaternion().setFromAxisAngle(axis, (angle * i) / steps)
+    const q = new THREE.Quaternion().slerpQuaternions(identity, rotation, i / steps)
     const p = origin.clone().add(fromDir.clone().applyQuaternion(q).normalize().multiplyScalar(radius))
     positions.push(p.x, p.y, p.z)
   }
@@ -1135,13 +1136,10 @@ function createAngleSector(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir:
 function makeArcLine(origin: THREE.Vector3, fromDir: THREE.Vector3, toDir: THREE.Vector3, radius: number, color: number, opacity = 1) {
   const points: THREE.Vector3[] = []
   const steps = 48
-  const axis = new THREE.Vector3().crossVectors(fromDir, toDir)
-  if (axis.lengthSq() < 0.0001) axis.set(0, 1, 0)
-  axis.normalize()
-
-  const angle = fromDir.angleTo(toDir)
+  const rotation = new THREE.Quaternion().setFromUnitVectors(fromDir.clone().normalize(), toDir.clone().normalize())
+  const identity = new THREE.Quaternion()
   for (let i = 0; i <= steps; i++) {
-    const q = new THREE.Quaternion().setFromAxisAngle(axis, (angle * i) / steps)
+    const q = new THREE.Quaternion().slerpQuaternions(identity, rotation, i / steps)
     points.push(origin.clone().add(fromDir.clone().applyQuaternion(q).normalize().multiplyScalar(radius)))
   }
   return makeTubeLine(points, color, 0.012, opacity)
@@ -1161,32 +1159,18 @@ function syncThreeJsSunShadow(metrics: SolarMetrics) {
   keyLight.target.updateMatrixWorld()
 
   const dayK = smoothstep(-2, 30, metrics.altitude)
-  keyLight.intensity = isShadowVisible ? 1.35 + dayK * 2.05 : 0.92 + dayK * 1.08
+  keyLight.intensity = (isShadowVisible ? 1.35 + dayK * 2.05 : 0.92 + dayK * 1.08) * smoothstep(-4, 2, metrics.altitude)
 }
 
 function updateSkyByTime(metrics: SolarMetrics) {
   if (!renderer || !scene) return
-  const colors = getSmoothSkyColors(metrics.altitude, metrics.solarTime)
-
-  renderer.setClearColor(colors.clear, 1)
-  if (scene.fog instanceof THREE.Fog) {
-    scene.fog.color.set(colors.fog)
-    scene.fog.near = metrics.altitude <= -4 ? 10 : 12.5
-    scene.fog.far = metrics.altitude <= -4 ? 28 : 32
-  }
-
-  if (hemisphereDome?.material) {
-    const material = hemisphereDome.material as THREE.MeshBasicMaterial
-    material.color.set(colors.dome)
-    material.opacity = metrics.altitude > 20 ? 0.08 : metrics.altitude <= -4 ? 0.045 : 0.065
-  }
+  dayNightSky?.updateSolar(metrics.altitude, metrics.azimuth, props.solarTime)
 
   const dayK = smoothstep(-2, 30, metrics.altitude)
   const nightK = 1 - smoothstep(-6, 6, metrics.altitude)
-  if (ambientLight) ambientLight.intensity = 0.42 + dayK * 0.62
-  if (rimLight) rimLight.intensity = 0.22 + dayK * 0.36
+  if (ambientLight) ambientLight.intensity = 0.25 + dayK * 0.79
+  if (rimLight) rimLight.intensity = 0.12 + dayK * 0.46
 
-  updateNightSkyDecorations(nightK)
   updateCityTimeElements(nightK, dayK, metrics)
 }
 
@@ -1220,7 +1204,8 @@ function updateCityTimeElements(nightK: number, dayK: number, metrics: SolarMetr
   const sunsetText = normalizeParentSunText(props.sunsetText, metrics)
   const key = [
     formatClock(metrics.solarTime),
-    Math.round(metrics.altitude),
+    formatSignedDegreesMinutes(metrics.altitude),
+    solarAzimuthText(metrics.altitude, metrics.azimuth),
     Math.round(dayK * 10),
     sunriseText,
     sunsetText,
@@ -1235,14 +1220,6 @@ function updateCityTimeElements(nightK: number, dayK: number, metrics: SolarMetr
 
   cityRoadMaterials.forEach(material => {
     material.color.set(mixColorNumber(0x1f2937, 0x3d4651, dayK))
-  })
-}
-
-function updateNightSkyDecorations(nightK: number) {
-  skyDecorationGroup.children.forEach(child => {
-    const points = child as THREE.Points
-    const mat = points.material as THREE.PointsMaterial
-    mat.opacity = nightK * 0.9
   })
 }
 
@@ -1276,7 +1253,7 @@ function drawCityClockTexture(
   ctx.textAlign = 'center'
   ctx.fillStyle = 'rgba(224,242,254,0.78)'
   ctx.font = '700 24px Microsoft YaHei, Arial'
-  ctx.fillText('城市太阳时', 384, 55)
+  ctx.fillText('地方太阳时', 384, 55)
 
   ctx.fillStyle = '#ffd166'
   ctx.font = '900 58px Microsoft YaHei, Arial'
@@ -1284,7 +1261,7 @@ function drawCityClockTexture(
 
   ctx.fillStyle = 'rgba(224,242,254,0.88)'
   ctx.font = '700 22px Microsoft YaHei, Arial'
-  ctx.fillText(`太阳高度 ${formatDeg(metrics.altitude)}   方位 ${formatDeg(metrics.azimuth)}`, 384, 171)
+  ctx.fillText(`高度角 ${formatSignedDegreesMinutes(metrics.altitude)}   方位角 ${solarAzimuthText(metrics.altitude, metrics.azimuth)}`, 384, 171)
 
   ctx.fillStyle = 'rgba(255,255,255,0.58)'
   ctx.font = '600 18px Microsoft YaHei, Arial'
@@ -1326,43 +1303,6 @@ function createGrassTexture() {
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   return texture
-}
-
-function getSmoothSkyColors(altitude: number, solarTime: number) {
-  const isMorning = solarTime < 12
-  const night = { top: 0x020713, mid: 0x071427, bottom: 0x030611, dome: 0x2351a3 }
-  const dawn = { top: 0xf1b06f, mid: 0x6fb8dd, bottom: 0x092142, dome: 0xffd19a }
-  const day = { top: 0x7ed7ff, mid: 0xbfeeff, bottom: 0x0d3158, dome: 0x9be7ff }
-  const sunset = { top: 0x664c94, mid: 0xc66b58, bottom: 0x081529, dome: 0xffa66b }
-
-  let a = night
-  let b = isMorning ? dawn : sunset
-  let t = smoothstep(-8, 7, altitude)
-
-  if (altitude > 4) {
-    a = isMorning ? dawn : sunset
-    b = day
-    t = smoothstep(4, 28, altitude)
-  }
-
-  const top = mixColor(a.top, b.top, t)
-  const mid = mixColor(a.mid, b.mid, t)
-  const bottom = mixColor(a.bottom, b.bottom, t)
-
-  if (wrapRef.value) {
-    wrapRef.value.style.setProperty('--sky-top', top)
-    wrapRef.value.style.setProperty('--sky-mid', mid)
-    wrapRef.value.style.setProperty('--sky-bottom', bottom)
-  }
-
-  return {
-    top,
-    mid,
-    bottom,
-    clear: mixColorNumber(a.mid, b.mid, t),
-    fog: mixColorNumber(a.bottom, b.bottom, t),
-    dome: mixColorNumber(a.dome, b.dome, t),
-  }
 }
 
 function buildRuntimeMetricsFromProps(): SolarMetrics {
@@ -1534,6 +1474,96 @@ function makeTubeLine(points: THREE.Vector3[], color: number, radius = 0.01, opa
   return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }))
 }
 
+function createAltitudeGaugeLabel(text: string, color: string, position: THREE.Vector3, emphasis = false) {
+  const key = emphasis ? 'altitude' : text
+  const cached = altitudeGaugeLabels.get(key)
+  if (cached) {
+    cached.position.copy(position)
+    cached.userData.gaugeLabel.anchor.copy(position)
+    cached.userData.gaugeLabel.setText(text)
+    return cached
+  }
+  const canvas = document.createElement('canvas')
+  // Keep GPU storage dimensions stable as the angle changes digit count.
+  // Crop the unused width with UVs instead of resizing an uploaded CanvasTexture.
+  canvas.width = 512
+  canvas.height = emphasis ? 112 : 66
+  const ctx = canvas.getContext('2d')!
+  const fontSize = emphasis ? 52 : 40
+  const font = `700 ${fontSize}px "Microsoft YaHei", Arial, sans-serif`
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture, transparent: true, depthTest: false, depthWrite: false,
+    toneMapped: false, sizeAttenuation: false,
+  }))
+  sprite.name = emphasis ? 'solar-altitude-readout' : 'solar-altitude-direction-label'
+  sprite.position.copy(position)
+  sprite.renderOrder = 54
+  sprite.frustumCulled = false
+  const label = { anchor: position.clone(), width: 0, height: 0, fontSize, emphasis, setText }
+  sprite.userData.gaugeLabel = label
+  function setText(value: string) {
+    if (sprite.userData.text === value) return
+    ctx.font = font
+    const contentWidth = Math.min(canvas.width, Math.ceil(ctx.measureText(value).width + 28))
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = 7
+    ctx.strokeStyle = 'rgba(8, 11, 17, 0.95)'
+    ctx.fillStyle = color
+    if (emphasis) {
+      ctx.font = '600 28px "Microsoft YaHei", Arial, sans-serif'
+      ctx.strokeText('太阳高度角', contentWidth / 2, 22)
+      ctx.fillText('太阳高度角', contentWidth / 2, 22)
+    }
+    ctx.font = font
+    ctx.strokeText(value, contentWidth / 2, emphasis ? 76 : 34)
+    ctx.fillText(value, contentWidth / 2, emphasis ? 76 : 34)
+    label.width = contentWidth
+    label.height = canvas.height
+    sprite.userData.text = value
+    texture.repeat.x = contentWidth / canvas.width
+    texture.needsUpdate = true
+  }
+  setText(text)
+  altitudeGaugeLabels.set(key, sprite)
+  return sprite
+}
+
+function updateAltitudeGaugeLabels() {
+  if (!camera || !altitudeAngleGroup || !lastCanvasWidth || !lastCanvasHeight) return
+  camera.updateWorldMatrix(true, false)
+  const width = lastCanvasWidth
+  const height = lastCanvasHeight
+  const worldPerPixel = 2 / (height * camera.projectionMatrix.elements[5]!)
+  const placed: { x: number; y: number; width: number; height: number }[] = []
+  for (const object of altitudeAngleGroup.children) {
+    if (!(object instanceof THREE.Sprite) || !object.userData.gaugeLabel) continue
+    const label = object.userData.gaugeLabel
+    const projected = label.anchor.clone().project(camera) as THREE.Vector3
+    object.visible = projected.z >= -1 && projected.z <= 1
+    if (!object.visible) continue
+    // Actual glyph size is 22–24 px for the angle, 15–16 px for the two reference directions.
+    const fontPixels = label.emphasis ? (width < 420 ? 22 : 24) : (width < 420 ? 15 : 16)
+    const pixelsPerTexel = Math.min(fontPixels / label.fontSize, Math.max(1, width - 20) / label.width)
+    const boxWidth = label.width * pixelsPerTexel
+    const boxHeight = label.height * pixelsPerTexel
+    object.scale.set(boxWidth * worldPerPixel, boxHeight * worldPerPixel, 1)
+    const x = clamp((projected.x + 1) * width / 2, boxWidth / 2 + 8, width - boxWidth / 2 - 8)
+    const anchorY = (1 - projected.y) * height / 2 - (label.emphasis ? 18 : 8)
+    let y = clamp(anchorY, boxHeight / 2 + 8, height - boxHeight / 2 - 8)
+    for (const offset of [0, -34, 34, -68, 68, -102, 102]) {
+      y = clamp(anchorY + offset, boxHeight / 2 + 8, height - boxHeight / 2 - 8)
+      if (!placed.some(box => Math.abs(x - box.x) < (boxWidth + box.width) / 2 + 6 && Math.abs(y - box.y) < (boxHeight + box.height) / 2 + 6)) break
+    }
+    placed.push({ x, y, width: boxWidth, height: boxHeight })
+    object.position.set(x / width * 2 - 1, 1 - y / height * 2, projected.z).unproject(camera)
+  }
+}
+
 function createSpriteText(text: string, color: string, position: THREE.Vector3, size = 0.22) {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')!
@@ -1621,16 +1651,6 @@ function hexToRgb(hex: number) {
   return { r: (hex >> 16) & 255, g: (hex >> 8) & 255, b: hex & 255 }
 }
 
-function mixColor(a: number, b: number, t: number) {
-  const ca = hexToRgb(a)
-  const cb = hexToRgb(b)
-  const k = clamp(t, 0, 1)
-  const r = Math.round(ca.r + (cb.r - ca.r) * k)
-  const g = Math.round(ca.g + (cb.g - ca.g) * k)
-  const bl = Math.round(ca.b + (cb.b - ca.b) * k)
-  return `rgb(${r}, ${g}, ${bl})`
-}
-
 function mixColorNumber(a: number, b: number, t: number) {
   const ca = hexToRgb(a)
   const cb = hexToRgb(b)
@@ -1658,10 +1678,6 @@ function formatClock(value: number) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
 
-function formatDeg(v: number) {
-  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`
-}
-
 function formatHour(v: number) {
   return `${v.toFixed(1)}小时`
 }
@@ -1673,20 +1689,29 @@ function getSolarViewportMode(width: number, height: number) {
   return 'normal'
 }
 
-function fitCameraToSolarViewport(width: number, height: number, mode = getSolarViewportMode(width, height)) {
+function fitCameraToSolarViewport(width: number, height: number, reset = false) {
   if (!camera || !controls) return
 
+  const mode = getSolarViewportMode(width, height)
   const compact = mode === 'compact'
   const veryCompact = mode === 'veryCompact'
-
-  // 只在布局档位变化时调整相机，不要在拖拽页面窗口时每一像素都重置相机，
-  // 否则 WebGL 画面会在 iPad / 浏览器缩放拖拽时出现明显闪烁。
   const target = southFacingSolarCameraTarget(mode)
   const position = southFacingSolarCameraPosition(mode)
 
   camera.fov = veryCompact ? 56 : compact ? 53 : 46
-  camera.position.copy(position)
-  controls.target.copy(target)
+  const verticalHalfAngle = degToRad(camera.fov / 2)
+  const horizontalHalfAngle = Math.atan(Math.tan(verticalHalfAngle) * width / Math.max(1, height))
+  const fitDistance = (SKY_RADIUS + 0.6) / Math.sin(Math.min(verticalHalfAngle, horizontalHalfAngle))
+  if (reset || !lastCameraFitDistance) {
+    controls.target.copy(target)
+    camera.position.copy(position.sub(target).normalize().multiplyScalar(fitDistance).add(target))
+  } else {
+    // 分栏拖动只按视角变化缩放取景距离，保留用户已经旋转的方向和缩放比例。
+    camera.position.sub(controls.target).multiplyScalar(fitDistance / lastCameraFitDistance).add(controls.target)
+  }
+  lastCameraFitDistance = fitDistance
+  controls.maxDistance = Math.max(32, fitDistance * 1.8)
+  camera.far = Math.max(160, fitDistance * 2.4)
   camera.lookAt(controls.target)
   camera.updateProjectionMatrix()
   controls.update()
@@ -1738,15 +1763,8 @@ function resize(force = false) {
   lastCanvasWidth = width
   lastCanvasHeight = height
 
-  const viewportMode = getSolarViewportMode(width, height)
-
   camera.aspect = width / Math.max(1, height)
-  if (force || viewportMode !== lastViewportMode) {
-    lastViewportMode = viewportMode
-    fitCameraToSolarViewport(width, height, viewportMode)
-  } else {
-    camera.updateProjectionMatrix()
-  }
+  fitCameraToSolarViewport(width, height)
 
   // 这里必须 updateStyle=true，并且同步 CSS 尺寸。
   // 但 resize 已做防抖，避免拖拽页面窗口时连续 setSize 造成 sun 场景闪烁。
@@ -1760,15 +1778,27 @@ function resize(force = false) {
 }
 
 function animate() {
+  if (sceneDisposed || mountedDisposed) return
   // 每帧只“检查”尺寸，只有 width / height 真的变了才 renderer.setSize。
   // 这样拖拽页面窗口时画布能连续跟随容器，又不会每帧无脑重建 drawingBuffer。
   resize(false)
   controls?.update()
+  updateAltitudeGaugeLabels()
   renderer?.render(scene, camera)
   animationId = requestAnimationFrame(animate)
 }
 
 function disposeScene() {
+  if (sceneDisposed) return
+  sceneDisposed = true
+  if (animationId) cancelAnimationFrame(animationId)
+  animationId = 0
+  // Helper groups share the same ownership rules as the remaining scene. Empty them
+  // before calling helper disposal, which would otherwise dispose Sprite/Arrow quads.
+  if (sundialGuide) clearGroup(sundialGuide.group)
+  if (sundialModel) clearGroup(sundialModel.group)
+  dayNightSky?.dispose()
+  dayNightSky = null
   sundialGuide?.dispose()
   sundialGuide = null
   sundialModel?.dispose()
@@ -1788,23 +1818,30 @@ function disposeScene() {
   resizeObserver?.disconnect()
   resizeObserver = null
   controls?.dispose()
+  if (scene) {
+    // Below the horizon these labels are detached but still owned by this component.
+    altitudeGaugeLabels.forEach(label => { if (!label.parent) scene.add(label) })
+    clearObjectChildren(scene)
+  }
+  altitudeGaugeLabels.clear()
+  streetLightItems.length = windowLightItems.length = trafficLightItems.length = cityRoadMaterials.length = cityClockItems.length = treeMeshes.length = 0
   if (renderer?.domElement?.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement)
   renderer?.dispose()
+  renderer?.forceContextLoss()
 }
 </script>
 
 <style scoped>
 .sun-lite {
-  --sky-top: #7ed7ff;
-  --sky-mid: #bfeeff;
-  --sky-bottom: #0d3158;
   position: relative;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  container-name: solar-scene;
+  container-type: inline-size;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 45% 20%, rgba(255, 255, 255, 0.18), transparent 24%),
-    linear-gradient(to bottom, var(--sky-top), var(--sky-mid) 54%, var(--sky-bottom));
+  background: #080b11;
 }
 
 .canvas-wrap {
@@ -1824,21 +1861,21 @@ function disposeScene() {
 .legend-panel {
   position: absolute;
   left: 16px;
-  bottom: 16px;
+  bottom: var(--scene-bottom-inset, 16px);
   z-index: 6;
   width: 190px;
-  border: 1px solid rgba(255, 209, 102, 0.2);
+  border: 1px solid rgba(204, 213, 221, 0.24);
   border-radius: 14px;
   padding: 10px;
-  background: rgba(4, 13, 28, 0.64);
-  backdrop-filter: blur(12px);
+  background: rgba(19, 22, 28, 0.7);
+  backdrop-filter: blur(18px) saturate(110%);
   display: grid;
   gap: 6px;
   pointer-events: none;
 }
 
 .legend-title {
-  color: #fff1b8;
+  color: #f2f2ef;
   font-size: 12px;
   font-weight: 900;
 }
@@ -1847,7 +1884,7 @@ function disposeScene() {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: rgba(235, 247, 255, 0.78);
+  color: rgba(229, 233, 238, 0.78);
   font-size: 10px;
 }
 
@@ -1888,10 +1925,13 @@ function disposeScene() {
   z-index: 6;
   max-width: calc(100% - 24px);
   padding: 8px 10px;
-  border: 1px solid rgba(191, 164, 238, 0.5);
-  border-radius: 10px;
-  background: rgba(4, 13, 28, 0.78);
-  color: #f0e5ff;
+  border: 1px solid rgba(204, 213, 221, 0.34);
+  border-radius: 14px;
+  background: rgba(19, 22, 28, 0.72);
+  box-shadow: 0 10px 28px rgba(5, 7, 12, 0.2), inset 0 1px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(110%);
+  -webkit-backdrop-filter: blur(18px) saturate(110%);
+  color: #e8edf2;
   font-size: 11px;
 }
 
@@ -1899,14 +1939,14 @@ function disposeScene() {
   padding: 3px 0;
   border: 0;
   background: transparent;
-  color: #f0e5ff;
+  color: #e8edf2;
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
 
 .sundial-guide-control button:focus-visible {
-  outline: 2px solid #ffd166;
+  outline: 2px solid #ddc69d;
   outline-offset: 3px;
 }
 
@@ -1921,36 +1961,39 @@ function disposeScene() {
   bottom: 16px;
   z-index: 6;
   display: grid;
-  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  width: min(420px, calc(100% - 32px));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   pointer-events: none;
 }
 
 .mini-hud div {
-  border: 1px solid rgba(117, 219, 255, 0.18);
+  border: 1px solid rgba(204, 213, 221, 0.24);
   border-radius: 12px;
-  background: rgba(4, 13, 28, 0.66);
-  backdrop-filter: blur(12px);
+  background: rgba(19, 22, 28, 0.72);
+  backdrop-filter: blur(18px) saturate(110%);
+  -webkit-backdrop-filter: blur(18px) saturate(110%);
+  box-shadow: 0 6px 18px rgba(5, 7, 12, 0.12), inset 0 1px rgba(255, 255, 255, 0.04);
   padding: 8px;
   display: grid;
   gap: 3px;
 }
 
 .mini-hud span {
-  color: rgba(235, 247, 255, 0.66);
+  color: rgba(209, 216, 224, 0.72);
   font-size: 10px;
 }
 
 .mini-hud b {
-  color: #ffd166;
+  color: #ddc69d;
   font-size: 12px;
   font-weight: 900;
-  text-shadow: 0 0 12px rgba(255, 209, 102, 0.34);
+  text-shadow: none;
 }
 
 .mini-hud div:first-of-type b,
 .mini-hud div:nth-of-type(3) b {
-  color: #fff1b8;
+  color: #c7deee;
 }
 
 .sundial-notice {
@@ -1959,40 +2002,56 @@ function disposeScene() {
   gap: 4px;
   margin: 0;
   padding: 8px;
-  border: 1px solid rgba(255, 209, 102, 0.35);
-  border-radius: 10px;
-  background: rgba(4, 13, 28, 0.86);
+  border: 1px solid rgba(221, 198, 157, 0.32);
+  border-radius: 12px;
+  background: rgba(19, 22, 28, 0.82);
+  backdrop-filter: blur(18px) saturate(110%);
+  -webkit-backdrop-filter: blur(18px) saturate(110%);
   line-height: 1.5;
 }
 
 .mini-hud .sundial-notice span {
-  color: #e4eef5;
+  color: #e3e8ee;
   font-size: 11px;
   overflow-wrap: anywhere;
 }
 
 
-/* ===================== 太阳视运动组件：平板 / 小屏浮层压缩 v3 ===================== */
-.sun-lite {
-  min-height: 400px;
-}
-
-.canvas-wrap {
-  min-height: inherit;
-}
-
-@media (max-width: 1440px), (max-height: 860px) {
+/* 分栏可独立缩放，浮层密度按太阳视运动容器自身宽度调整。 */
+@container solar-scene (max-width: 640px) {
   .mini-hud {
     right: 10px;
-    bottom: 10px;
-    grid-template-columns: repeat(3, minmax(78px, 1fr));
+    bottom: var(--scene-bottom-inset, 10px);
+    width: min(390px, calc(100% - 20px));
     gap: 6px;
-    max-width: min(420px, calc(100% - 20px));
   }
 
   .mini-hud div {
     padding: 6px;
     border-radius: 10px;
+  }
+
+  .mini-hud span {
+    font-size: 10px;
+  }
+
+  .mini-hud b {
+    font-size: 11px;
+  }
+}
+
+@container solar-scene (max-width: 360px) {
+  .mini-hud {
+    gap: 5px;
+  }
+
+  .mini-hud div {
+    padding: 5px 6px;
+  }
+
+  .sundial-guide-control,
+  .mini-hud .sundial-notice span {
+    font-size: 10px;
   }
 
   .mini-hud span {
@@ -2004,25 +2063,9 @@ function disposeScene() {
   }
 }
 
-@media (max-width: 1180px), (max-height: 760px) {
+@container solar-scene (max-width: 270px) {
   .mini-hud {
-    grid-template-columns: repeat(2, minmax(78px, 1fr));
-    max-width: min(300px, calc(100% - 20px));
-    gap: 5px;
-  }
-
-  .mini-hud div {
-    padding: 5px 6px;
-  }
-}
-
-@media (max-width: 760px) {
-  .mini-hud {
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    max-width: none;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2068,7 +2111,7 @@ function disposeScene() {
   .legend-panel {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: rgba(4, 13, 28, 0.82);
+    background: rgba(19, 22, 28, 0.88);
   }
 }
 

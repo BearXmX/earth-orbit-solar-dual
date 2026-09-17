@@ -23,12 +23,55 @@ async function loadTs(path) {
   return import(await compileTsModule(new URL(path, import.meta.url)))
 }
 
+const { AXIAL_TILT, AXIAL_TILT_LABEL, POLAR_CIRCLE, POLAR_CIRCLE_LABEL, latitudeMagnitudeLabel } = await loadTs('../src/utils/astronomy.ts')
 const { advanceEarthMotion, rotationFromSolarMinutes, solarMinutesFromRotation } = await loadTs('../src/utils/earthMotion.ts')
 const { equatorialShadow, polarAxis, solarPathDirection, solarAltitudeGuide, sundialGroundPosition, sundialEdgeLight, sundialReadingNotice } = await loadTs('../src/utils/sundial.ts')
 const { createEquatorialSundial } = await loadTs('../src/scene/createEquatorialSundial.ts')
 const { createSundialAlignmentGuide } = await loadTs('../src/scene/createSundialAlignmentGuide.ts')
 const { southFacingSolarCameraPosition, southFacingSolarCameraTarget } = await loadTs('../src/utils/solarView.ts')
 const near = (a, b, tolerance = 1e-9) => assert.ok(Math.abs(a - b) < tolerance, `${a} ≠ ${b}`)
+
+test('统一倾角使用23度26分，回归线与极圈互余且度分标签一致', () => {
+  near(AXIAL_TILT * 60, 23 * 60 + 26)
+  near(POLAR_CIRCLE + AXIAL_TILT, 90)
+  near(POLAR_CIRCLE * 60, 66 * 60 + 34)
+  assert.equal(AXIAL_TILT_LABEL, '23°26′')
+  assert.equal(POLAR_CIRCLE_LABEL, '66°34′')
+  for (const sign of [-1, 1]) {
+    assert.equal(latitudeMagnitudeLabel(sign * AXIAL_TILT), AXIAL_TILT_LABEL)
+    assert.equal(latitudeMagnitudeLabel(sign * POLAR_CIRCLE), POLAR_CIRCLE_LABEL)
+  }
+})
+
+test('分至日整条日周轨道与赤道晷面平行，春秋分穿过天球原点', () => {
+  for (const latitude of [-90, -POLAR_CIRCLE, -33.87, 0, 24.48, 39.9, POLAR_CIRCLE, 90]) {
+    const normal = polarAxis(latitude)
+    for (const declination of [-AXIAL_TILT, 0, AXIAL_TILT]) {
+      const offset = Math.sin(declination * Math.PI / 180)
+      const first = solarPathDirection(latitude, declination, 0)
+      for (const hour of [0, 3, 6, 9.5, 12, 15, 18, 21, 24]) {
+        const sun = solarPathDirection(latitude, declination, hour)
+        near(sun.length(), 1)
+        near(sun.dot(normal), offset)
+        near(sun.clone().sub(first).dot(normal), 0)
+      }
+    }
+  }
+})
+
+test('统一倾角同时决定回归线正午直射和极圈昼夜临界', () => {
+  for (const hemisphere of [-1, 1]) {
+    const solstice = hemisphere * AXIAL_TILT
+    const zenith = solarPathDirection(solstice, solstice, 12)
+    near(zenith.y, 1)
+    near(zenith.x, 0)
+    near(zenith.z, 0)
+    near(solarPathDirection(hemisphere * POLAR_CIRCLE, solstice, 0).y, 0)
+    near(solarPathDirection(hemisphere * POLAR_CIRCLE, -solstice, 12).y, 0)
+    assert.ok(solarPathDirection(hemisphere * (POLAR_CIRCLE + 0.1), solstice, 0).y > 0)
+    assert.ok(solarPathDirection(hemisphere * (POLAR_CIRCLE + 0.1), -solstice, 12).y < 0)
+  }
+})
 
 test('两项都暂停时，公转位置和地球朝向完全不变', () => {
   const state = { orbitDay: 172.4, spinRadians: 1.7 }
@@ -114,7 +157,7 @@ test('移动后默认北侧视角仍可清楚看到北京、上海、厦门夏�
     for (const latitude of [39.9, 31.23, 24.48]) {
       const dialCenter = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08).add(new Vector3(0, 2.35 * 0.7, 0))
       const towardCamera = southFacingSolarCameraPosition(mode).sub(dialCenter).normalize()
-      const shadow = shadowAt(latitude, 23.44, 12)
+      const shadow = shadowAt(latitude, AXIAL_TILT, 12)
       assert.equal(shadow.status, 'readable')
       const litFaceNormal = polarAxis(latitude).multiplyScalar(shadow.face)
       assert.ok(litFaceNormal.dot(towardCamera) > 0.9, '从正面观察的夹角应小于 26°，便于读数')
@@ -124,7 +167,7 @@ test('移动后默认北侧视角仍可清楚看到北京、上海、厦门夏�
 
 test('晷针投影落在对应时刻的刻度，南北半球、双面上午下午均一致', () => {
   for (const latitude of [-33.87, 0, 39.9, 69.65]) {
-    for (const declination of [-23.44, 23.44]) {
+    for (const declination of [-AXIAL_TILT, AXIAL_TILT]) {
       for (const hour of [9, 12, 15]) {
         const shadow = shadowAt(latitude, declination, hour)
         if (shadow.status === 'night') continue
@@ -146,7 +189,7 @@ test('春秋分平行入射不生成伪针影，赤道正午也不例外', () =>
 })
 
 test('晷面中心与春秋分整条轨迹共面，而非偏向冬至轨迹平面', () => {
-  for (const latitude of [-69.65, -33.87, 0, 24.48, 31.23, 39.9, 66.56, 69.65]) {
+  for (const latitude of [-69.65, -33.87, 0, 24.48, 31.23, 39.9, POLAR_CIRCLE, 69.65]) {
     const position = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08)
     const center = position.clone().add(new Vector3(0, 2.35 * 0.7, 0))
     const normal = polarAxis(latitude)
@@ -160,7 +203,7 @@ test('晷面中心与春秋分整条轨迹共面，而非偏向冬至轨迹平�
 })
 
 test('极高纬度保留平行展示，日晷底座不移出场地或埋入地面', () => {
-  for (const latitude of [-90, -89.9, 66.56, 69.65, 89.9, 90]) {
+  for (const latitude of [-90, -89.9, POLAR_CIRCLE, 69.65, 89.9, 90]) {
     const position = sundialGroundPosition(latitude, 1.725, 7.4, 1.75, 0.08)
     assert.ok(Math.hypot(position.x, position.z) + 1.75 < 7.4)
     near(position.y, 0.08)
@@ -183,7 +226,7 @@ test('春秋分示意光线与真实太阳光平行，止于迎光盘缘，日�
       assert.equal(shadowAt(latitude, 0, hour).endpoint, null)
     }
     assert.equal(sundialEdgeLight(latitude, -5, 180, center, 1.4), null)
-    const summerSun = solarPathDirection(latitude, 23.44, 12)
+    const summerSun = solarPathDirection(latitude, AXIAL_TILT, 12)
     assert.equal(sundialEdgeLight(latitude, Math.asin(summerSun.y) * 180 / Math.PI, Math.atan2(-summerSun.x, summerSun.z) * 180 / Math.PI, center, 1.4), null)
   }
 })
@@ -227,13 +270,13 @@ test('实际辅助平面包含整条春秋分轨迹，并与移动后的日晷�
   }
 })
 test('夜晚与极夜隐藏阴影，极昼午夜仍能读数', () => {
-  assert.equal(shadowAt(39.9, 23.44, 0).status, 'night')
-  assert.equal(shadowAt(69.65, -23.44, 12).status, 'night')
-  assert.equal(shadowAt(69.65, 23.44, 0).status, 'readable')
+  assert.equal(shadowAt(39.9, AXIAL_TILT, 0).status, 'night')
+  assert.equal(shadowAt(69.65, -AXIAL_TILT, 12).status, 'night')
+  assert.equal(shadowAt(69.65, AXIAL_TILT, 0).status, 'readable')
 })
 
 test('高度角图形与数值一致，覆盖上海夏至正午、低空太阳和天顶', () => {
-  for (const altitude of [0.01, 26.66, 73.54, 82.21, 89.99, 90]) {
+  for (const altitude of [0.01, 90 - 39.9 - AXIAL_TILT, 90 - 39.9 + AXIAL_TILT, 90 - 31.23 + AXIAL_TILT, 89.99, 90]) {
     for (const azimuth of [0, 90, 180, 270]) {
       const guide = solarAltitudeGuide(altitude, azimuth, 7.6)
       near(guide.direction.angleTo(guide.horizontal) * 180 / Math.PI, altitude, 1e-6)
@@ -246,7 +289,7 @@ test('高度角图形与数值一致，覆盖上海夏至正午、低空太阳�
 })
 
 test('短晷针保留真实影长，长晷针的投影只在盘缘截断', () => {
-  const declination = 23.44
+  const declination = AXIAL_TILT
   const direction = solarPathDirection(39.9, declination, 12)
   const altitude = Math.asin(direction.y) * 180 / Math.PI
   const azimuth = Math.atan2(-direction.x, direction.z) * 180 / Math.PI
@@ -267,7 +310,7 @@ test('实际日晷网格的影线到达盘缘且不会越出晷面，夜间与�
     model = createEquatorialSundial({ capabilities: { getMaxAnisotropy: () => 1 } })
     const shadow = model.group.getObjectByName('equatorial-gnomon-shadow')
     assert.ok(shadow)
-    for (const declination of [1, 10, 23.44, -23.44]) {
+    for (const declination of [1, 10, AXIAL_TILT, -AXIAL_TILT]) {
       const sun = solarPathDirection(39.9, declination, 12)
       model.update(39.9, Math.asin(sun.y) * 180 / Math.PI, Math.atan2(-sun.x, sun.z) * 180 / Math.PI)
       assert.equal(shadow.visible, true)
@@ -289,7 +332,7 @@ test('实际日晷网格的影线到达盘缘且不会越出晷面，夜间与�
 
 test('日晷说明与实际受光状态一致，区分南北半球、春秋分和夜间', () => {
   for (const latitude of [39.9, -33.87]) {
-    for (const declination of [23.44, -23.44]) {
+    for (const declination of [AXIAL_TILT, -AXIAL_TILT]) {
       const sun = solarPathDirection(latitude, declination, 12)
       const notice = sundialReadingNotice(latitude, Math.asin(sun.y) * 180 / Math.PI, Math.atan2(-sun.x, sun.z) * 180 / Math.PI)
       assert.equal(notice.status, 'readable')
@@ -299,5 +342,5 @@ test('日晷说明与实际受光状态一致，区分南北半球、春秋分�
   }
   assert.equal(sundialReadingNotice(39.9, -5, 180).status, 'night')
   assert.equal(sundialReadingNotice(39.9, 50.1, 180).status, 'parallel')
-  assert.ok(sundialReadingNotice(0, 66.56, 0).title.includes('竖直晷面'))
+  assert.ok(sundialReadingNotice(0, POLAR_CIRCLE, 0).title.includes('竖直晷面'))
 })

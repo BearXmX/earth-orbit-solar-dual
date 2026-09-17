@@ -1,4 +1,5 @@
 import { Vector3 } from 'three'
+import { formatDegreesMinutes } from './astronomy'
 
 const DEG = Math.PI / 180
 
@@ -9,6 +10,14 @@ export function sunDirection(altitude: number, azimuth: number) {
     Math.sin(altitude * DEG),
     Math.cos(azimuth * DEG) * Math.cos(altitude * DEG),
   )
+}
+
+/** 方位角从北向东顺时针计量；太阳位于天顶或天底时没有水平投影，方位角不定义。 */
+export function solarAzimuthText(altitude: number, azimuth: number) {
+  if (Math.abs(altitude - 90) < 1e-6) return '天顶（方位不定）'
+  if (Math.abs(altitude + 90) < 1e-6) return '天底（方位不定）'
+  const normalized = ((azimuth % 360) + 360) % 360
+  return formatDegreesMinutes((Math.round(normalized * 60) % 21600) / 60)
 }
 
 /** 天球以当地观测原点为中心，光线与高度角使用同一个太阳方向。 */
@@ -65,12 +74,12 @@ export function sundialIllumination(latitude: number, altitude: number, azimuth:
 export function sundialReadingNotice(latitude: number, altitude: number, azimuth: number) {
   const { status, face } = sundialIllumination(latitude, altitude, azimuth)
   if (status === 'night') return {
-    status, title: '夜间：日晷无法读数',
-    detail: '太阳在地平线或以下，没有直射阳光形成可读针影。',
+    status, title: '日晷无法读数',
+    detail: '太阳中心位于地平线或以下，晷面上无可读针影。',
   }
   if (status === 'parallel') return {
-    status, title: '春秋分：阳光掠过晷面边缘',
-    detail: '阳光近乎平行于晷面，盘面上无可读针影；地面上的影子仍可能存在。',
+    status, title: '阳光掠射：盘面无可读针影',
+    detail: '阳光近乎平行于晷面；春秋分时沿盘缘掠过，地面上的影子仍可能存在。',
   }
   const faceName = face > 0 ? '朝北天极面' : '朝南天极面'
   const surface = Math.abs(latitude) < 0.01 ? '竖直晷面' : latitude * face > 0 ? '上表面' : '下表面'

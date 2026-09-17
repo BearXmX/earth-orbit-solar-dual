@@ -5,18 +5,14 @@ import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
-let currentMode = 'standard'
-
-const modeArgIndex = process.argv.findIndex(item => item === '--mode')
-
-if (modeArgIndex !== -1 && process.argv[modeArgIndex + 1]) {
-  currentMode = process.argv[modeArgIndex + 1]
+const editionDirectory = (mode: string) => {
+  if (mode === 'standard') return '地球自转与公转-标准版'
+  if (mode === 'city') return '地球自转与公转-进阶城市版'
+  return '地球自转与公转-进阶日晷版'
 }
 
-const isStandard = currentMode === 'standard'
-
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     vue(),
     viteSingleFile(),
@@ -51,7 +47,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: `地球自转与公转-${isStandard ? '标准版' : '进阶版'}`,
+    outDir: editionDirectory(mode),
     assetsDir: 'assets',
     copyPublicDir: true, // 开启public目录复制（如果textures在public下）
     rollupOptions: {
@@ -66,4 +62,4 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     cssCodeSplit: false, // 可选：内联CSS，减少文件依赖
   },
-})
+}))
