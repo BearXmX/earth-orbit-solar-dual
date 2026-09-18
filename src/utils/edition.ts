@@ -9,7 +9,7 @@ export const appEdition: AppEdition = configuredEdition === 'standard'
     : 'sundial'
 
 export const isAdvancedEdition = appEdition !== 'standard'
-export const solarSceneObject = appEdition === 'city' ? 'city' : 'city'
+export const solarSceneObject = appEdition === 'city' ? 'city' : 'sundial'
 export const editionLabel = appEdition === 'standard'
   ? '标准版'
   : appEdition === 'city'
