@@ -80,7 +80,7 @@ function createRendererBoundary(options = {}) {
   const harnessCode = [
     'let appDisposed = false, earthCompilePromise = null, earthDisposalPending = false;',
     'let earthRenderer = boundary.renderer, miniRenderer = boundary.miniRenderer, earthScene = boundary.scene, earthCamera = new THREE.PerspectiveCamera();',
-    'let observerSurface=null, observerFlight=null, timeZoneOverlay=null, sunBeam=null, terminatorVisual=null, sunGlow=null, cameraTween=null, observerGuide=null, nebulaSky=null, obliquityHelper=null;',
+    'let observerSurface=null, observerFlight=null, timeZoneOverlay=null, sunBeam=null, terminatorVisual=null, sunGlow=null, cameraTween=null, observerGuide=null, noonAltitudeGuide=null, nebulaSky=null, obliquityHelper=null;',
     'let earthResize={disconnect(){boundary.calls.observerDisconnect++}}, miniResizeObserver={disconnect(){boundary.calls.observerDisconnect++}}, earthControls={dispose(){boundary.calls.controlDispose++}};',
     'let miniCamera=null,miniPerspectiveCamera=null,miniPolarCamera=null,cachedSunTexture=null,earthMaterial=null;',
     'let stopObserverLook=null,orbitTweenToken=0,raf=0,autoOrbitDay=172,runtimeUtcMinutes=720,lastTime=0;',

@@ -17,7 +17,8 @@ export function solarAzimuthText(altitude: number, azimuth: number) {
   if (Math.abs(altitude - 90) < 1e-6) return '天顶（方位不定）'
   if (Math.abs(altitude + 90) < 1e-6) return '天底（方位不定）'
   const normalized = ((azimuth % 360) + 360) % 360
-  return formatDegreesMinutes((Math.round(normalized * 60) % 21600) / 60)
+  const formatted = formatDegreesMinutes(normalized)
+  return formatted === formatDegreesMinutes(360) ? formatDegreesMinutes(0) : formatted
 }
 
 /** 天球以当地观测原点为中心，光线与高度角使用同一个太阳方向。 */

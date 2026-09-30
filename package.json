@@ -7,10 +7,16 @@
     "test": "node --test tests/*.test.mjs",
     "dev": "vite --host",
     "dev:city": "vite --host --mode city",
+    "dev:decimal": "vite --host --mode advanced-decimal",
+    "dev:standard:decimal": "vite --host --mode standard-decimal",
+    "dev:city:decimal": "vite --host --mode city-decimal",
     "preview": "vite preview",
     "build:standard": "vite build --mode standard",
     "build:advanced": "vite build --mode advanced",
     "build:city": "vite build --mode city",
+    "build:standard:decimal": "vite build --mode standard-decimal",
+    "build:advanced:decimal": "vite build --mode advanced-decimal",
+    "build:city:decimal": "vite build --mode city-decimal",
     "type-check": "vue-tsc --build"
   },
   "dependencies": {

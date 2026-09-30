@@ -228,6 +228,9 @@
           </div>
           <p v-if="layers.latitudeDayArc || layers.latitudeNightArc" class="control-note">昼弧为金色，夜弧为蓝色，均包含 0° 赤道；关闭“纬线”可单独观察弧段。</p>
           <div class="map-overlay-controls">
+            <div class="custom-point-heading"><label for="noon-altitude-switch">正午太阳高度</label><el-switch
+                id="noon-altitude-switch" v-model="layers.noonAltitude" aria-label="正午太阳高度" /></div>
+            <p class="control-note">显示正午子午线、每隔 10° 的纬度刻度，以及各纬度的正午高度读数。</p>
             <div class="custom-point-heading"><label for="date-line-switch">国际日界线</label><el-switch
                 id="date-line-switch" v-model="layers.dateLine" aria-label="国际日界线" /></div>
             <div class="custom-point-heading"><label for="time-zones-switch">理论时区划分</label><el-switch
@@ -384,6 +387,14 @@
         </div>
       </div>
     </FloatingPanel>
+    <FloatingPanel :top-inset="128" v-show="layers.noonAltitude" title="正午太阳高度" anchor="top-right"
+      :anchor-index="rightPanelIndex('noon')" :subtitle="formatOrbitDayLabel(dayNo)" :initial-right="14"
+      :initial-top="128" :initial-width="368" :initial-height="550" :bottom-inset="dockClearance"
+      closeable @close="layers.noonAltitude = false">
+      <NoonAltitudePanel :declination="solar.declination" :terms="terms"
+        :active-term="terms.find(term => Math.abs(sceneDay - termDay(term)) < 0.01)?.name || ''"
+        @select-term="setTerm" @focus="focusNoonAltitude" />
+    </FloatingPanel>
     <FloatingPanel :top-inset="128" v-show="miniCameraVisible" title="副机位" anchor="top-right"
       :anchor-index="rightPanelIndex('mini')" subtitle="独立观察地球" class="mini-camera-panel" :min-width="320"
       :initial-right="14" :initial-top="128" :initial-width="460" :initial-height="380" :bottom-inset="dockClearance"
@@ -426,7 +437,7 @@
         </div>
         <div class="timeline-channel tilt-channel">
           <div class="channel-head"><span class="channel-label">黄赤交角</span><strong>{{ obliquityLabel }}</strong></div>
-          <el-slider v-model="obliquityMinutes" :min="0" :max="MAX_OBLIQUITY_MINUTES" :step="1" :show-tooltip="false"
+          <el-slider v-model="obliquityMinutes" :min="0" :max="MAX_OBLIQUITY_MINUTES" :step="IS_DECIMAL_ANGLE ? 6 : 1" :show-tooltip="false"
             aria-label="黄赤交角" :aria-valuetext="obliquityLabel" />
           <div class="tilt-actions"><span>0° — {{ AXIAL_TILT_LABEL }}</span><button
               @click="obliquityMinutes = MAX_OBLIQUITY_MINUTES">恢复 {{ AXIAL_TILT_LABEL }}</button></div>
@@ -449,6 +460,7 @@ import FloatingPanel from './components/FloatingPanel.vue'
 import ObserverCompass from './components/ObserverCompass.vue'
 import PageLoading from './components/PageLoading.vue'
 import UsageGuide from './components/UsageGuide.vue'
+import NoonAltitudePanel from './components/NoonAltitudePanel.vue'
 import { createSceneLoading } from './utils/sceneLoading'
 import { prepareSceneTextures } from './scene/prepareSceneTextures'
 import { clearObjectChildren } from './scene/disposeSceneResources'
@@ -456,9 +468,10 @@ import { appEdition, isAdvancedEdition, solarSceneObject, editionLabel } from '.
 import { createNebulaSkybox } from './scene/createNebulaSkybox'
 import { createEarthAppearance } from './scene/createEarthAppearance'
 import { createObliquityHelper } from './scene/createObliquityHelper'
-import { AXIAL_TILT as DEFAULT_AXIAL_TILT, AXIAL_TILT_LABEL, MAX_OBLIQUITY_MINUTES, formatDegreesMinutes, formatSignedDegreesMinutes } from './utils/astronomy'
+import { AXIAL_TILT as DEFAULT_AXIAL_TILT, AXIAL_TILT_LABEL, MAX_OBLIQUITY_MINUTES, IS_DECIMAL_ANGLE, formatDegreesMinutes, formatSignedDegreesMinutes } from './utils/astronomy'
 import { declinationAtDay, orbitAngleAtDay, solarLongitudeAtDay } from './utils/earthOrbit'
 import { createObserverGuide } from './scene/createObserverGuide'
+import { createNoonAltitudeGuide } from './scene/createNoonAltitudeGuide'
 import './styles/lab.css'
 import { createTerminator } from './scene/createTerminator'
 import { createSunGlow } from './scene/createSunGlow'
@@ -608,7 +621,7 @@ const formulaPanelVisible = ref(false)
 const legendVisible = ref(false)
 const miniCameraVisible = ref(false)
 const miniCameraMode = ref<MiniCameraMode>('front')
-const rightPanelOrder = computed(() => [dataPanelVisible.value ? 'data' : '', formulaPanelVisible.value ? 'formula' : '', miniCameraVisible.value ? 'mini' : ''].filter(Boolean))
+const rightPanelOrder = computed(() => [dataPanelVisible.value ? 'data' : '', formulaPanelVisible.value ? 'formula' : '', miniCameraVisible.value ? 'mini' : '', layers.noonAltitude ? 'noon' : ''].filter(Boolean))
 function rightPanelIndex(panel: string) { return Math.max(0, rightPanelOrder.value.indexOf(panel)) }
 
 const miniCameraModes = [
@@ -633,6 +646,7 @@ const layers = reactive({
   latitudeLabels: false,
   latitudeDayArc: false,
   latitudeNightArc: false,
+  noonAltitude: false,
   timeZones: false,
   dateLine: false,
   terminator: true,
@@ -709,6 +723,7 @@ let miniPolarCamera: THREE.OrthographicCamera | null = null
 let nebulaSky: ReturnType<typeof createNebulaSkybox> | null = null
 let obliquityHelper: ReturnType<typeof createObliquityHelper> | null = null
 let observerGuide: ReturnType<typeof createObserverGuide> | null = null
+let noonAltitudeGuide: ReturnType<typeof createNoonAltitudeGuide> | null = null
 const observerWorldPoint = new THREE.Vector3()
 const observerWorldNormal = new THREE.Vector3()
 let miniRenderer: THREE.WebGLRenderer | null = null
@@ -994,7 +1009,7 @@ watch(
 // 动态图层本身由 updateAnimatedOrbitFrame 每帧更新；这里补一次，
 // 确保暂停状态下切换晨昏线、太阳光、直射点时也立刻同步。
 watch(
-  () => [layers.terminator, layers.sunRays, layers.subsolar, layers.latitudeDayArc, layers.latitudeNightArc],
+  () => [layers.terminator, layers.sunRays, layers.subsolar, layers.latitudeDayArc, layers.latitudeNightArc, layers.noonAltitude],
   () => {
     updateAnimatedOrbitFrame(visualOrbitDay())
   },
@@ -1184,6 +1199,8 @@ function initEarthScene() {
   earthScene.add(nebulaSky.mesh)
   observerGuide = createObserverGuide(EARTH_R)
   earthScene.add(observerGuide.group)
+  noonAltitudeGuide = createNoonAltitudeGuide(EARTH_R)
+  earthScene.add(noonAltitudeGuide.group)
   terminatorVisual = createTerminator(EARTH_R)
   earthScene.add(terminatorVisual.group)
   sunGlow = createSunGlow(SUN_R)
@@ -1530,6 +1547,7 @@ function updateAnimatedOrbitFrame(day: number) {
 
   const axisDirection = new THREE.Vector3(Math.sin(-axialTiltRotation.value), Math.cos(axialTiltRotation.value), 0)
   terminatorVisual?.update(earthPos, earthToSunWorld, axisDirection, layers.terminator)
+  noonAltitudeGuide?.update(earthPos, earthToSunWorld, axisDirection, layers.noonAltitude)
   sunGlow?.update(sunGlowVisible.value, sunGlowStrength.value)
   sunBeam?.update(earthPos, sunBeamVisible.value, sunBeamStrength.value)
   timeZoneOverlay?.update({ timeZones: layers.timeZones, dateLine: layers.dateLine })
@@ -1949,7 +1967,22 @@ function createLatLngGrid() {
 
     if (layers.latitudeLabels) {
       const labelPos = latLngToVector(lat, 0, EARTH_R * 1.108)
-      group.add(addGridLabel(formatGridLat(lat), labelPos, isEquator ? '#f0646b' : '#9af5ff'))
+      const label = addGridLabel(formatGridLat(lat), labelPos, isEquator ? '#f0646b' : '#9af5ff')
+      label.name = `latitude-label-${lat}`
+      group.add(label)
+    }
+  }
+
+  // 特殊纬度不受“回归线与极圈”线条开关影响；倾角变化时重新定位和更新度数。
+  if (layers.latitudeLabels) {
+    const marked = Array.from({ length: 11 }, (_, index) => -75 + index * 15)
+    for (const lat of [-polarCircle.value, -axialTilt.value, axialTilt.value, polarCircle.value]) {
+      if (marked.some(value => Math.abs(value - lat) < 1e-7)) continue
+      marked.push(lat)
+      const color = Math.abs(lat) > 45 ? '#c0caff' : '#ffd166'
+      const label = addGridLabel(formatGridLat(lat), latLngToVector(lat, 35, EARTH_R * 1.13), color)
+      label.name = `latitude-label-${lat}`
+      group.add(label)
     }
   }
 
@@ -1976,7 +2009,8 @@ function createLatLngGrid() {
 
 function formatGridLat(lat: number) {
   if (lat === 0) return '0°'
-  return `${Math.abs(lat)}°${lat > 0 ? 'N' : 'S'}`
+  const degrees = Number.isInteger(lat) ? `${Math.abs(lat)}°` : currentLatitudeLabel(lat)
+  return `${degrees}${lat > 0 ? 'N' : 'S'}`
 }
 
 function formatGridLng(lng: number) {
@@ -2321,6 +2355,19 @@ function setCamera(mode: CameraMode) {
   animateCameraTo(pose.position, pose.target)
 }
 
+function focusNoonAltitude() {
+  if (!earthCamera || !earthControls) return
+  if (observerViewEnabled.value || observerFlying.value) finishObserverView()
+  const target = getEarthWorldPosition()
+  const axis = new THREE.Vector3(Math.sin(-axialTiltRotation.value), Math.cos(axialTiltRotation.value), 0)
+  const view = target.clone().negate().normalize().projectOnPlane(axis).normalize()
+  focusCenter.value = 'earth'
+  activeCameraMode.value = 'point'
+  const halfAngle = Math.min(earthCamera.fov * DEG / 2, Math.atan(Math.tan(earthCamera.fov * DEG / 2) * earthCamera.aspect))
+  const distance = Math.max(EARTH_R * 4, EARTH_R * 1.75 / Math.sin(halfAngle))
+  animateCameraTo(target.clone().addScaledVector(view, distance), target)
+}
+
 function focusObserverGuide() {
   if (!earthCamera || !earthControls) return
   if (observerViewEnabled.value || observerFlying.value) finishObserverView()
@@ -2496,6 +2543,7 @@ function renderEarthFrame(now = performance.now()) {
   earthRenderer.setViewport(0, 0, width, height)
   earthRenderer.setClearColor(0x000000, 0)
   observerGuide?.updateForCamera(earthCamera, height)
+  noonAltitudeGuide?.updateForCamera(earthCamera, height)
   obliquityHelper?.updateForCamera(earthCamera, layers.tiltAngle, height)
   if (observerSurface && (observerViewEnabled.value || observerFlying.value) && (!observerFlying.value || observerFlightProgress.value >= 0.94)) {
     observerSurface.update({ altitude: solar.value.altitude, azimuth: solar.value.azimuth, solarMinutes: solar.value.solarTimeValue, aspect: width / Math.max(1, height) })
@@ -2506,7 +2554,7 @@ function renderEarthFrame(now = performance.now()) {
     // Hide them only for this pass; the independent globe camera retains its selected layers.
     const closeFlight = observerFlying.value && observerFlightProgress.value > 0.7
     const hidden = closeFlight ? [globeLayer, earthGuideLayer, observerGuide?.group, animatedOrbitLayer,
-      timeZoneOverlay?.group, terminatorVisual?.group, obliquityHelper?.group].filter((item): item is THREE.Group => !!item)
+      timeZoneOverlay?.group, terminatorVisual?.group, obliquityHelper?.group, noonAltitudeGuide?.group].filter((item): item is THREE.Group => !!item)
       .map(group => ({ group, visible: group.visible })) : []
     hidden.forEach(({ group }) => { group.visible = false })
     earthRenderer.render(earthScene, earthCamera)
@@ -2530,6 +2578,7 @@ function renderMiniCameraFrame(now = performance.now()) {
   syncMiniCamera()
   miniRenderer.clear(true, true, true)
   observerGuide?.updateForCamera(miniCamera, lastMiniCssHeight)
+  noonAltitudeGuide?.updateForCamera(miniCamera, lastMiniCssHeight)
   obliquityHelper?.updateForCamera(miniCamera, layers.tiltAngle, lastMiniCssHeight)
   miniRenderer.render(earthScene, miniCamera)
 }
@@ -2875,6 +2924,8 @@ function disposeEarthScene() {
   cameraTween = null
   observerGuide?.dispose()
   observerGuide = null
+  noonAltitudeGuide?.dispose()
+  noonAltitudeGuide = null
   nebulaSky?.mesh.removeFromParent()
   nebulaSky?.dispose()
   nebulaSky = null
@@ -3222,13 +3273,13 @@ function formatDuration(hours: number) {
 }
 
 function formatLat(lat: number) {
-  if (Math.round(Math.abs(lat) * 60) === 0) return '0°00′'
+  if (formatDegreesMinutes(Math.abs(lat)) === formatDegreesMinutes(0)) return formatDegreesMinutes(0)
   return `${lat > 0 ? '北纬' : '南纬'}${currentLatitudeLabel(lat)}`
 }
 
 function formatLng(lng: number) {
   const value = normalizeLng(lng)
-  if (Math.round(Math.abs(value) * 60) === 0) return '0°00′'
+  if (formatDegreesMinutes(Math.abs(value)) === formatDegreesMinutes(0)) return formatDegreesMinutes(0)
   return `${value > 0 ? '东经' : '西经'}${formatDegreesMinutes(Math.abs(value))}`
 }
 

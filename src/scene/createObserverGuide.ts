@@ -193,7 +193,7 @@ export function createObserverGuide(earthRadius: number) {
   sector.renderOrder = 29
   parts.altitude.add(arc, sector)
 
-  const angleLabel = createLabel('altitude', 'h = 0°00′', '#ffdb8a')
+  const angleLabel = createLabel('altitude', `h = ${formatSignedDegreesMinutes(0)}`, '#ffdb8a')
   const normalLabel = createLabel('normal', '地表法线', '#85ebd0')
   const sunLabel = createLabel('sunRay', '太阳平行光', '#ffdb8a')
   const horizonLabel = createLabel('horizon', '当地水平面', '#cae4dd')

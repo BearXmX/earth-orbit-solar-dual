@@ -1,8 +1,5 @@
 import * as THREE from 'three'
-function formatDegreesMinutes(degrees: number) {
-  const minutes = Math.round(Math.abs(degrees) * 60)
-  return `${Math.floor(minutes / 60)}°${String(minutes % 60).padStart(2, '0')}′`
-}
+import { formatDegreesMinutes } from '../utils/astronomy'
 
 interface ObliquityColors {
   eclipticColor?: THREE.ColorRepresentation

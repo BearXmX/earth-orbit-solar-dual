@@ -30,6 +30,6 @@ export function compassDirection(heading: number) {
 }
 
 export function formatCompassHeading(heading: number) {
-  const rounded = Math.round(normalizeCompassHeading(heading) * 60) / 60
-  return formatDegreesMinutes(normalizeCompassHeading(rounded))
+  const formatted = formatDegreesMinutes(normalizeCompassHeading(heading))
+  return formatted === formatDegreesMinutes(360) ? formatDegreesMinutes(0) : formatted
 }

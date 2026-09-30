@@ -49,6 +49,12 @@ export function createEarthAppearance(dayTexture: THREE.Texture, nightTexture: T
       varying vec3 vWorldNormal;
       varying vec3 vWorldPosition;
 
+      float earthDayMask(float lightAmount) {
+        // The Sun's centre is on the horizon at dot = 0; soften only the raster edge.
+        float edgeWidth = max(fwidth(lightAmount) * 0.75, 0.00001);
+        return smoothstep(-edgeWidth, edgeWidth, lightAmount);
+      }
+
       void main() {
         vec3 normalDirection = normalize(vWorldNormal);
         vec3 sunDirection = normalize(sunDir);
@@ -58,7 +64,7 @@ export function createEarthAppearance(dayTexture: THREE.Texture, nightTexture: T
         vec3 dayColor = pow(max(texture2D(map, vUv).rgb, vec3(0.0)), vec3(1.08));
         vec3 nightLights = max(texture2D(nightMap, vUv).rgb, vec3(0.0));
         float lightAmount = dot(normalDirection, sunDirection);
-        float dayMask = smoothstep(-0.16, 0.24, lightAmount);
+        float dayMask = earthDayMask(lightAmount);
         float directLight = max(lightAmount, 0.0);
 
         // 蓝色占比估算海洋，避免陆地、冰雪和云层出现水面的镜面高光。
