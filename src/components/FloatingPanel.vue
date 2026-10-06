@@ -376,6 +376,7 @@ onUnmounted(() => {
   --panel-border: rgba(232, 234, 237, .18);
   position: fixed;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   box-sizing: border-box;
   overflow: hidden;
@@ -392,6 +393,7 @@ onUnmounted(() => {
 .variant-track { --panel-accent: #b9d4e2; }
 .floating-panel-head {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -453,6 +455,10 @@ onUnmounted(() => {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(193, 202, 212, .4) transparent;
+}
+.variant-control .floating-panel-content {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .floating-panel-resize {
   position: absolute;

@@ -10,6 +10,7 @@ defineEmits<{ ready: []; loadError: [message: string] }>()
 // 复用原太阳视运动组件，以日晷替换建筑，并移除广告牌、街道和路灯。
 const props = withDefaults(defineProps<{
   axialTilt?: number
+  panelBottomInset?: number
   latitude: number
   longitude: number
   dayOfYear: number

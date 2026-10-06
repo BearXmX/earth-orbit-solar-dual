@@ -1,20 +1,23 @@
 <template>
-  <PageLoading v-if="!pageReady" :title="isAdvanced && solarVisible ? '地球运动与太阳视运动' : '地球自转与公转'" :loaded="loadedResources"
-    :total="totalResources" :preparing="preparingScene" :error="loadingError" @retry="reloadPage" />
+  <PageLoading v-if="!pageReady" :title="isAdvanced && solarVisible ? '地球运动与太阳视运动' : '地球自转与公转'"
+    :loaded="loadedResources" :total="totalResources" :preparing="preparingScene" :error="loadingError"
+    @retry="reloadPage" />
   <div class="earth-orbit-lab" :inert="!pageReady" :aria-busy="!pageReady"
-    :class="{ 'is-initializing': !pageReady, 'is-solar-open': isAdvanced && solarVisible, 'is-splitting': splitDragging }">
+    :class="{ 'is-initializing': !pageReady, 'is-solar-open': isAdvanced && solarVisible, 'is-splitting': splitDragging, 'is-timeline-hidden': !timelineVisible }">
     <main class="page">
       <section ref="stageRef" class="stage-zone" :class="{ split: isAdvanced && solarVisible }"
         :style="{ '--split-ratio': splitRatio + '%' }">
         <div class="world-stage">
-          <div ref="earthRef" class="canvas-host" :class="{ 'is-picking': pointPickingEnabled, 'is-observing': observerViewEnabled && !observerFlying, 'is-looking': observerLooking }" @pointerdown.capture="startObserverLook"></div>
-          <div v-if="!observerViewEnabled && !observerFlying" class="scene-caption"><span>地球运动</span></div>
+          <div ref="earthRef" class="canvas-host"
+            :class="{ 'is-picking': pointPickingEnabled, 'is-observing': observerViewEnabled && !observerFlying, 'is-looking': observerLooking }"
+            @pointerdown.capture="startObserverLook"></div>
           <div v-if="observerViewEnabled || observerFlying" class="observer-view-notice" role="status">
             <strong>{{ observerFlying ? observerFlightPhase : selectedPoint.name + ' · 地面观测' }}</strong>
             <span>{{ observerFlying ? (playing ? '正在分段飞行，镜头持续跟随观测点。' : '分段飞行定位中，演示暂时暂停。') : observerSunNotice }}</span>
             <small v-if="!observerFlying">地方真太阳时 {{ solar.solarTimeText }} · 太阳大小为教学放大</small>
             <small v-if="!observerFlying">拖动环视 · {{ observerFollowingSun ? '正在跟随太阳' : '自由环视中' }}</small>
-            <button v-if="!observerFlying" type="button" :aria-pressed="observerFollowingSun" @click="followObserverSun">{{ observerFollowingSun ? '跟随太阳' : '看向太阳' }}</button>
+            <button v-if="!observerFlying" type="button" :aria-pressed="observerFollowingSun"
+              @click="followObserverSun">{{ observerFollowingSun ? '跟随太阳' : '看向太阳' }}</button>
             <small v-if="!observerFlying && Math.abs(selectedPoint.lat) > 89.999">极点的方位以所选经线作为参考。</small>
           </div>
           <div v-if="observerFlying" class="observer-flight-veil" :style="{ opacity: observerFlightVeil }"></div>
@@ -40,9 +43,9 @@
                   type="button" @click="solarVisible = false">关闭右侧</button></div>
             </div>
           </div>
-          <component v-else :is="solarSceneObject === 'city' ? CitySolarScene : EquatorialSundial" class="solar-component"
-            @ready="startup.sceneReady('solar')" @load-error="onSolarLoadError" :axial-tilt="axialTilt"
-            :latitude="selectedPoint.lat" :longitude="selectedPoint.lng" :day-of-year="dayNo"
+          <component v-else :is="solarSceneObject === 'city' ? CitySolarScene : EquatorialSundial"
+            class="solar-component" @ready="startup.sceneReady('solar')" @load-error="onSolarLoadError"
+            :axial-tilt="axialTilt" :panel-bottom-inset="dockClearance" :latitude="selectedPoint.lat" :longitude="selectedPoint.lng" :day-of-year="dayNo"
             :solar-time="solar.solarTimeValue" :declination="solar.declination" :altitude="solar.altitude"
             :azimuth="solar.azimuth" :sunrise-text="solar.sunriseText" :sunset-text="solar.sunsetText"
             :day-length-text="solar.dayLengthText" />
@@ -61,7 +64,8 @@
       </div>
       <nav class="header-actions" aria-label="场景面板">
         <button @click="setCamera('overview')">总览</button>
-        <button type="button" aria-haspopup="dialog" :aria-expanded="usageGuideVisible" @click="usageGuideVisible = true">使用说明</button>
+        <button type="button" aria-haspopup="dialog" :aria-expanded="usageGuideVisible"
+          @click="usageGuideVisible = true">使用说明</button>
         <button :class="{ active: controlsVisible }" :aria-pressed="controlsVisible"
           @click="controlsVisible = !controlsVisible">控制</button>
         <button :class="{ active: dataPanelVisible }" :aria-pressed="dataPanelVisible"
@@ -72,6 +76,8 @@
           @click="miniCameraVisible = !miniCameraVisible">副机位</button>
         <button :class="{ active: legendVisible }" :aria-pressed="legendVisible"
           @click="legendVisible = !legendVisible">图例</button>
+        <button type="button" :class="{ active: timelineVisible }" :aria-pressed="timelineVisible"
+          aria-controls="timeline-dock" @click="timelineVisible = !timelineVisible">时间轴</button>
         <button v-if="isAdvanced" :class="{ active: solarVisible }" :aria-pressed="solarVisible"
           @click="solarVisible = !solarVisible">太阳视运动</button>
         <label v-if="isAdvanced" class="observer-view-toggle"><span>观测点视角</span><el-switch
@@ -193,6 +199,8 @@
               @click="layers.longitudeLines = !layers.longitudeLines">经线</el-button>
             <el-button size="small" :type="layers.latitudeLines ? 'primary' : 'default'"
               @click="layers.latitudeLines = !layers.latitudeLines">纬线</el-button>
+            <el-button size="small" :type="layers.equatorLine ? 'primary' : 'default'"
+              @click="layers.equatorLine = !layers.equatorLine">赤道</el-button>
             <el-button size="small" :type="layers.longitudeLabels ? 'primary' : 'default'"
               @click="layers.longitudeLabels = !layers.longitudeLabels">经度标注</el-button>
             <el-button size="small" :type="layers.latitudeLabels ? 'primary' : 'default'"
@@ -226,7 +234,8 @@
             <el-button size="small" :type="layers.rotationDirection ? 'primary' : 'default'"
               @click="layers.rotationDirection = !layers.rotationDirection">自转方向</el-button>
           </div>
-          <p v-if="layers.latitudeDayArc || layers.latitudeNightArc" class="control-note">昼弧为金色，夜弧为蓝色，均包含 0° 赤道；关闭“纬线”可单独观察弧段。</p>
+          <p v-if="layers.latitudeDayArc || layers.latitudeNightArc" class="control-note">昼弧为金色，夜弧为蓝色，均包含 0°
+            赤道；关闭“纬线”和“赤道”可单独观察弧段。</p>
           <div class="map-overlay-controls">
             <div class="custom-point-heading"><label for="noon-altitude-switch">正午太阳高度</label><el-switch
                 id="noon-altitude-switch" v-model="layers.noonAltitude" aria-label="正午太阳高度" /></div>
@@ -389,11 +398,11 @@
     </FloatingPanel>
     <FloatingPanel :top-inset="128" v-show="layers.noonAltitude" title="正午太阳高度" anchor="top-right"
       :anchor-index="rightPanelIndex('noon')" :subtitle="formatOrbitDayLabel(dayNo)" :initial-right="14"
-      :initial-top="128" :initial-width="368" :initial-height="550" :bottom-inset="dockClearance"
-      closeable @close="layers.noonAltitude = false">
+      :initial-top="128" :initial-width="368" :initial-height="550" :bottom-inset="dockClearance" closeable
+      @close="layers.noonAltitude = false">
       <NoonAltitudePanel :declination="solar.declination" :terms="terms"
-        :active-term="terms.find(term => Math.abs(sceneDay - termDay(term)) < 0.01)?.name || ''"
-        @select-term="setTerm" @focus="focusNoonAltitude" />
+        :active-term="terms.find(term => Math.abs(sceneDay - termDay(term)) < 0.01)?.name || ''" @select-term="setTerm"
+        @focus="focusNoonAltitude" />
     </FloatingPanel>
     <FloatingPanel :top-inset="128" v-show="miniCameraVisible" title="副机位" anchor="top-right"
       :anchor-index="rightPanelIndex('mini')" subtitle="独立观察地球" class="mini-camera-panel" :min-width="320"
@@ -411,7 +420,7 @@
 
       </div>
     </FloatingPanel>
-    <footer class="timeline-dock" aria-label="运动控制轴">
+    <footer id="timeline-dock" v-show="timelineVisible" class="timeline-dock" aria-label="运动控制轴">
       <div class="timeline-scroll">
         <button class="master-play" :aria-label="playing ? '全部暂停' : '开始演示'" :title="playing ? '全部暂停' : '恢复演示'"
           @click="toggleAllMotion">{{ playing ? 'Ⅱ' : '▶' }}</button>
@@ -421,8 +430,8 @@
                 formatOrbitDayLabel(orbitDay) }}</strong><span>{{ revolutionMultiplier }}× 加速</span></div>
           <el-slider v-model="orbitDay" aria-label="公转日期" :min="1" :max="365" :step="1" :show-tooltip="false" />
           <div class="season-ticks"><button v-for="term in terms" :key="term.name"
-              :style="{ left: ((termDay(term) - 1) / 364 * 100) + '%' }"
-              :class="{ active: isTermActive(term) }" @click="setTerm(term)">{{ term.name }}</button></div>
+              :style="{ left: ((termDay(term) - 1) / 364 * 100) + '%' }" :class="{ active: isTermActive(term) }"
+              @click="setTerm(term)">{{ term.name }}</button></div>
         </div>
         <div class="timeline-channel rotation-channel">
           <div class="channel-head"><button class="channel-play" :aria-pressed="rotationPlaying"
@@ -437,8 +446,8 @@
         </div>
         <div class="timeline-channel tilt-channel">
           <div class="channel-head"><span class="channel-label">黄赤交角</span><strong>{{ obliquityLabel }}</strong></div>
-          <el-slider v-model="obliquityMinutes" :min="0" :max="MAX_OBLIQUITY_MINUTES" :step="IS_DECIMAL_ANGLE ? 6 : 1" :show-tooltip="false"
-            aria-label="黄赤交角" :aria-valuetext="obliquityLabel" />
+          <el-slider v-model="obliquityMinutes" :min="0" :max="MAX_OBLIQUITY_MINUTES" :step="IS_DECIMAL_ANGLE ? 6 : 1"
+            :show-tooltip="false" aria-label="黄赤交角" :aria-valuetext="obliquityLabel" />
           <div class="tilt-actions"><span>0° — {{ AXIAL_TILT_LABEL }}</span><button
               @click="obliquityMinutes = MAX_OBLIQUITY_MINUTES">恢复 {{ AXIAL_TILT_LABEL }}</button></div>
         </div>
@@ -560,7 +569,7 @@ const pointPickingEnabled = ref(false)
 const sunGlowVisible = ref(true)
 const sunGlowStrength = ref(1)
 const sunBeamVisible = ref(true)
-const sunBeamStrength = ref(1)
+const sunBeamStrength = ref(0.2)
 const observerViewEnabled = ref(false)
 const observerLooking = ref(false)
 const observerHeading = ref(0)
@@ -572,12 +581,14 @@ const observerFlying = ref(false)
 const observerFlightPhase = ref('')
 const observerFlightProgress = ref(0)
 const observerFlightVeil = computed(() => observerFlying.value ? Math.max(0, 1 - Math.abs(observerFlightProgress.value - 0.94) / 0.06) : 0)
-const dockClearance = ref(136)
+const timelineVisible = ref(true)
+const dockReservedSpace = ref(136)
+const dockClearance = computed(() => timelineVisible.value ? dockReservedSpace.value : 14)
 const viewportHeight = ref(window.innerHeight)
 const dataPanelInitialHeight = computed(() => Math.min(380, Math.max(160, viewportHeight.value - 128 - dockClearance.value - 68)))
 function syncViewportInsets() {
   viewportHeight.value = window.innerHeight
-  dockClearance.value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-clearance')) || 136
+  dockReservedSpace.value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-clearance')) || 136
 }
 const formulaCollapsed = ref(true)
 const stageRef = ref<HTMLElement | null>(null)
@@ -611,7 +622,7 @@ function handleSplitKey(event: KeyboardEvent) {
   splitRatio.value = event.key === 'Home' ? 25 : event.key === 'End' ? 75 : Math.max(25, Math.min(75, splitRatio.value + (event.key === 'ArrowLeft' ? -2 : 2)))
 }
 const cityKey = ref('beijing')
-const rayCount = ref(5)
+const rayCount = ref(7)
 const lightIntensity = ref(1.25)
 const nightBrightness = ref(1)
 const cityLightStrength = ref(2.45)
@@ -642,6 +653,7 @@ const selectedPoint = reactive({
 const layers = reactive({
   longitudeLines: true,
   latitudeLines: true,
+  equatorLine: true,
   longitudeLabels: false,
   latitudeLabels: false,
   latitudeDayArc: false,
@@ -987,6 +999,7 @@ watch(
   () => [
     layers.longitudeLines,
     layers.latitudeLines,
+    layers.equatorLine,
     layers.latitudeDayArc,
     layers.latitudeNightArc,
     layers.longitudeLabels,
@@ -1307,7 +1320,7 @@ function updateEarthScene() {
   if (layers.axisArrow) earthGuideLayer.add(createAxisDirectionArrow())
 
   // 赤道也使用同一昼夜判定；关闭普通纬线后，仍可独立观察昼弧或夜弧。
-  if (layers.longitudeLines || layers.latitudeLines || layers.latitudeDayArc || layers.latitudeNightArc || layers.equator || layers.longitudeLabels || layers.latitudeLabels) globeLayer.add(createLatLngGrid())
+  if (layers.longitudeLines || layers.latitudeLines || layers.equatorLine || layers.latitudeDayArc || layers.latitudeNightArc || layers.longitudeLabels || layers.latitudeLabels || layers.tropics) globeLayer.add(createLatLngGrid())
   if (layers.equator) globeLayer.add(createEquatorPlane())
   if (layers.zones) globeLayer.add(createHeatZones())
   if (layers.rotationDirection) globeLayer.add(createRotationDirectionArrows())
@@ -1445,12 +1458,12 @@ function createLightAwareLatitudeLine(points: THREE.Vector3[], options: { isEqua
   const material = new THREE.ShaderMaterial({
     uniforms: {
       sunDir: { value: new THREE.Vector3(-1, 0, 0) },
-      baseColor: { value: new THREE.Color(isEquator ? 0xf0646b : 0x7dd3fc) },
+      baseColor: { value: new THREE.Color(isEquator && layers.equatorLine ? 0xf0646b : 0x7dd3fc) },
       dayColor: { value: new THREE.Color(0xffd166) },
       nightColor: { value: new THREE.Color(0x78a9ff) },
       dayArcEnabled: { value: layers.latitudeDayArc ? 1 : 0 },
       nightArcEnabled: { value: layers.latitudeNightArc ? 1 : 0 },
-      baseOpacity: { value: layers.latitudeLines || (isEquator && layers.equator) ? (isEquator ? 1 : 0.66) : 0 },
+      baseOpacity: { value: isEquator && layers.equatorLine ? 1 : (layers.latitudeLines ? 0.66 : 0) },
     },
     vertexShader: `
       uniform vec3 sunDir;
@@ -1952,11 +1965,11 @@ function createLatLngGrid() {
     return sprite
   }
 
-  // 包含 0° 赤道，普通纬线、昼弧与夜弧可独立控制。
+  // 普通纬线包含 0°；赤道开关独立控制红色强调，昼弧、夜弧也包含 0°。
   for (let lat = -75; lat <= 75; lat += 15) {
     const isEquator = lat === 0
 
-    if (layers.latitudeLines || layers.latitudeDayArc || layers.latitudeNightArc || (isEquator && layers.equator)) {
+    if (layers.latitudeLines || (isEquator && layers.equatorLine) || layers.latitudeDayArc || layers.latitudeNightArc) {
       const points: THREE.Vector3[] = []
       for (let lng = -180; lng <= 180; lng += 3) points.push(latLngToVector(lat, lng, isEquator ? EARTH_R * 1.006 : radius))
       const lineObj = createLightAwareLatitudeLine(points, { isEquator })
@@ -1973,14 +1986,14 @@ function createLatLngGrid() {
     }
   }
 
-  // 特殊纬度不受“回归线与极圈”线条开关影响；倾角变化时重新定位和更新度数。
-  if (layers.latitudeLabels) {
-    const marked = Array.from({ length: 11 }, (_, index) => -75 + index * 15)
+  // 特殊纬度度数仅随回归线与极圈显示；与普通纬度重合时合并去重。
+  if (layers.tropics) {
+    const marked = layers.latitudeLabels ? Array.from({ length: 11 }, (_, index) => -75 + index * 15) : []
     for (const lat of [-polarCircle.value, -axialTilt.value, axialTilt.value, polarCircle.value]) {
       if (marked.some(value => Math.abs(value - lat) < 1e-7)) continue
       marked.push(lat)
       const color = Math.abs(lat) > 45 ? '#c0caff' : '#ffd166'
-      const label = addGridLabel(formatGridLat(lat), latLngToVector(lat, 35, EARTH_R * 1.13), color)
+      const label = addGridLabel(formatGridLat(lat), latLngToVector(lat, 0, EARTH_R * 1.108), color)
       label.name = `latitude-label-${lat}`
       group.add(label)
     }

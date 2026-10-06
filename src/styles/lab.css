@@ -36,6 +36,7 @@ button { font: inherit; }
 button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--lab-accent); outline-offset: 3px; }
 .earth-orbit-lab { position: relative; width: 100%; height: 100dvh; overflow: hidden; color: var(--lab-text); background: #111318; }
 .earth-orbit-lab.is-initializing { visibility: hidden; }
+.earth-orbit-lab.is-timeline-hidden { --dock-clearance: 14px; }
 .page, .stage-zone { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 .stage-zone { display: flex; flex-flow: row nowrap; }
 .world-stage { position: relative; flex: 1 1 0; min-width: 0; height: 100%; overflow: hidden; }
@@ -55,13 +56,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--lab-ac
 .solar-error-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .solar-error-actions button { padding: 7px 14px; border: 1px solid #dfc79e4d; border-radius: 8px; background: #dfc79e12; color: #ead8b8; cursor: pointer; }
 .solar-error-actions button:hover { background: #dfc79e24; }
-.earth-orbit-lab .solar-component .mini-hud { bottom: var(--scene-bottom-inset); }
-.earth-orbit-lab .solar-component .mini-hud > div,
-.earth-orbit-lab .solar-component .sundial-notice { border-color: #e2e6ec29; background: #181b21cf; color: #d0d6dc; }
-.earth-orbit-lab .solar-component .mini-hud b,
-.earth-orbit-lab .solar-component .sundial-notice b { color: #ecd9b8; }
-.earth-orbit-lab .solar-component .mini-hud span { color: #b7c1cb; }
-.earth-orbit-lab .solar-component .sundial-guide-control { top: calc(var(--lab-header-bottom) + 56px); color: #bac7d2; }
+.earth-orbit-lab .solar-component .sundial-guide-control { color: #bac7d2; }
 .earth-orbit-lab .solar-component .sundial-guide-control button { border-color: #e0d1b63b; color: #e8d4af; background: #202329bf; }
 .scene-caption { position: fixed; z-index: 30; left: 18px; bottom: calc(var(--dock-clearance) + 39px); display: flex; flex-direction: column; gap: 5px; font-size: 12px; pointer-events: none; color: #bfc7d0; text-shadow: 0 2px 7px #000; }
 .scene-caption small { color: #969fa9; font-size: 11px; }
@@ -98,7 +93,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--lab-ac
 .observer-view-notice button { grid-column: 2; grid-row: 1 / 3; min-height: 30px; padding: 5px 10px; border: 1px solid #d8c39e40; border-radius: 7px; background: #d4bf9620; color: #ebdbbd; font-size: 12px; white-space: nowrap; cursor: pointer; }
 .observer-flight-veil { position: absolute; inset: 0; z-index: 25; background: #090d13; pointer-events: none; will-change: opacity; }
 
-.left-panel { padding: 0 12px 14px; font-size: 13px; }
+.left-panel { width: 100%; min-width: 0; padding: 0 12px 14px; font-size: 13px; overflow-wrap: anywhere; }
 .panel-card { padding: 16px 0; border-bottom: 1px solid #e4e8ee18; }
 .panel-card:last-child { border-bottom: 0; }
 .panel-title { display: flex; align-items: center; gap: 8px; color: #e0e2e5; font-size: 15px; font-weight: 600; margin-bottom: 12px; }
@@ -130,14 +125,16 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--lab-ac
 .map-overlay-controls .custom-point-heading > label { min-width: 0; white-space: nowrap; }
 .map-overlay-controls .el-switch { flex: 0 0 auto; }
 .map-overlay-controls .control-note { margin: 0; }
-.mini-control-grid { display: grid; gap: 18px; min-width: 0; }
+.mini-control-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; min-width: 0; }
 .mini-control-grid > .mini-control-card { margin-top: 0; }
-.mini-control-card { margin-top: 16px; }
+.mini-control-card { min-width: 0; margin-top: 16px; }
 .mini-control-card:first-child { margin-top: 0; }
 .mini-control-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: #b9c2cb; }
 .mini-control-head b { color: var(--lab-accent); font-weight: 600; font-variant-numeric: tabular-nums; }
 .mini-control-head + .el-slider { margin-top: 4px; }
 .earth-orbit-lab .el-slider { height: 30px; --el-slider-height: 4px; --el-slider-button-size: 12px; --el-slider-main-bg-color: #cdb38a; --el-slider-runway-bg-color: #dfe5ef23; }
+/* Keep the slider's 36px drag target within the panel's 12px side padding at both ends. */
+.left-panel .el-slider { width: calc(100% - 12px); margin-inline: 6px; }
 .earth-orbit-lab .el-slider__button { border-width: 2px; background: #f4ead8; }
 .sun-glow-control { margin: 0 0 20px; padding: 13px; border: 1px solid #dccaab24; border-radius: 10px; background: #c9b58d05; }
 .sun-glow-control + .light-control-grid { margin-top: 0; }

@@ -2,14 +2,6 @@
   <div ref="wrapRef" class="sun-lite">
     <div ref="canvasWrapRef" class="canvas-wrap"></div>
 
-    <div v-if="props.sceneObject === 'sundial'" class="sundial-guide-control">
-      <button type="button" :aria-pressed="showSundialGuide" @click="showSundialGuide = !showSundialGuide">
-        {{ showSundialGuide ? '收起' : '显示' }}晷面平行示意
-      </button>
-      <p v-if="showSundialGuide">紫色示意：{{ isZeroTilt ? '全年' : '春秋分' }}轨迹所在平面 ∥ 晷面</p>
-      <p v-if="showSundialGuide && sundialNotice.status === 'parallel'">橙色光线：沿晷面边缘掠过</p>
-    </div>
-
     <!--     <div class="legend-panel">
       <div class="legend-title">图例</div>
       <div><i class="dot yellow"></i> 当前太阳</div>
@@ -21,30 +13,39 @@
       <div><i class="dot ray"></i> 太阳光线</div>
     </div> -->
 
-    <div class="mini-hud">
-      <p v-if="props.sceneObject === 'sundial'" class="sundial-notice" role="status" aria-atomic="true">
-        <b>{{ sundialNotice.title }}</b>
-        <span>{{ sundialNotice.detail }}</span>
-      </p>
-      <div>
-        <span title="太阳中心与当地地平面的夹角；地平线上方为正，下方为负。">太阳高度角</span><b>{{ formatSignedDegreesMinutes(runtimeMetrics.altitude) }}</b>
-      </div>
-      <div>
-        <span title="北为0°，东90°，南180°，西270°；极点以所选经线建立参考方向。">太阳方位角</span><b>{{ solarAzimuthText(runtimeMetrics.altitude, runtimeMetrics.azimuth) }}</b>
-      </div>
-      <div>
-        <span>地方太阳时</span><b>{{ formatClock(runtimeMetrics.solarTime) }}</b>
-      </div>
-      <div>
-        <span>昼长</span><b>{{ props.dayLengthText }}</b>
-      </div>
-      <div>
-        <span>日出</span><b>{{ props.sunriseText }}</b>
-      </div>
-      <div>
-        <span>日落</span><b>{{ props.sunsetText }}</b>
-      </div>
+    <Teleport to="body">
+    <FloatingPanel title="太阳视运动数据" class="solar-data-panel" anchor="top-right"
+      :initial-right="14" :initial-top="128" :top-inset="128" :bottom-inset="props.panelBottomInset"
+      :initial-width="360" :initial-height="310" :min-width="320" :min-height="224">
+    <template #header-meta>
+      <button v-if="props.sceneObject === 'sundial'" type="button" class="solar-info-toggle"
+        :aria-pressed="showSundialInfo" :aria-label="showSundialInfo ? '返回太阳视运动读数' : '查看日晷说明'"
+        @click="showSundialInfo = !showSundialInfo">{{ showSundialInfo ? '返回读数' : '日晷说明' }}</button>
+    </template>
+    <div class="solar-readout">
+        <dl v-if="!showSundialInfo || props.sceneObject !== 'sundial'" class="solar-data-grid">
+          <div class="solar-metric-altitude"><dt title="太阳中心与当地地平面的夹角；地平线上方为正，下方为负。">太阳高度角</dt><dd>{{ formatSignedDegreesMinutes(runtimeMetrics.altitude) }}</dd></div>
+          <div class="solar-metric-azimuth"><dt title="北为0°，东90°，南180°，西270°；极点以所选经线建立参考方向。">太阳方位角</dt><dd>{{ solarAzimuthText(runtimeMetrics.altitude, runtimeMetrics.azimuth) }}</dd></div>
+          <div><dt>地方太阳时</dt><dd>{{ formatClock(runtimeMetrics.solarTime) }}</dd></div>
+          <div><dt>昼长</dt><dd>{{ props.dayLengthText }}</dd></div>
+          <div><dt><i class="solar-time-dot sunrise-dot" aria-hidden="true"></i>日出</dt><dd>{{ props.sunriseText }}</dd></div>
+          <div><dt><i class="solar-time-dot sunset-dot" aria-hidden="true"></i>日落</dt><dd>{{ props.sunsetText }}</dd></div>
+        </dl>
+        <div v-else class="solar-sundial-info">
+        <p class="sundial-notice" role="status" aria-atomic="true">
+          <b>{{ sundialNotice.title }}</b>
+          <span>{{ sundialNotice.detail }}</span>
+        </p>
+        <div class="sundial-guide-control">
+          <button type="button" :aria-pressed="showSundialGuide" @click="showSundialGuide = !showSundialGuide">
+            {{ showSundialGuide ? '收起' : '显示' }}晷面平行示意
+          </button>
+          <p v-if="showSundialGuide">{{ isZeroTilt ? '全年' : '春秋分' }}轨迹平面 ∥ 晷面<span v-if="sundialNotice.status === 'parallel'"> · 沿盘缘入射</span></p>
+        </div>
+        </div>
     </div>
+    </FloatingPanel>
+    </Teleport>
   </div>
 </template>
 
@@ -55,6 +56,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createEquatorialSundial } from './scene/createEquatorialSundial'
+import FloatingPanel from './components/FloatingPanel.vue'
 import { createSundialAlignmentGuide } from './scene/createSundialAlignmentGuide'
 import { createDayNightSky } from './scene/createDayNightSky'
 import { clearObjectChildren } from './scene/disposeSceneResources'
@@ -102,6 +104,7 @@ type CityClockItem = {
 
 const props = withDefaults(defineProps<{
   sceneObject?: 'city' | 'sundial'
+  panelBottomInset?: number
   axialTilt?: number
   latitude: number
   longitude: number
@@ -113,7 +116,7 @@ const props = withDefaults(defineProps<{
   sunriseText: string
   sunsetText: string
   dayLengthText: string
-}>(), { axialTilt: AXIAL_TILT })
+}>(), { axialTilt: AXIAL_TILT, panelBottomInset: 14 })
 
 const emit = defineEmits<{ ready: []; loadError: [message: string] }>()
 let mountedDisposed = false
@@ -122,6 +125,7 @@ let sceneDisposed = false
 const canvasWrapRef = ref<HTMLDivElement | null>(null)
 const wrapRef = ref<HTMLDivElement | null>(null)
 const showSundialGuide = ref(true)
+const showSundialInfo = ref(false)
 
 const SKY_RADIUS = 7.6
 const GROUND_RADIUS = 7.4
@@ -1918,158 +1922,87 @@ function disposeScene() {
   background: #fff4bd;
 }
 
-.sundial-guide-control {
-  position: absolute;
-  top: 76px;
-  left: 12px;
-  z-index: 6;
-  max-width: calc(100% - 24px);
-  padding: 8px 10px;
-  border: 1px solid rgba(204, 213, 221, 0.34);
-  border-radius: 14px;
-  background: rgba(19, 22, 28, 0.72);
-  box-shadow: 0 10px 28px rgba(5, 7, 12, 0.2), inset 0 1px rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(18px) saturate(110%);
-  -webkit-backdrop-filter: blur(18px) saturate(110%);
-  color: #e8edf2;
-  font-size: 11px;
+.solar-data-panel :deep(.floating-panel-content) {
+  container: solar-panel-body / size;
+  overflow: hidden;
+  padding: 0;
 }
-
-.sundial-guide-control button {
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: #e8edf2;
+.solar-info-toggle {
+  padding: 5px 8px;
+  border: 1px solid #ddc69d30;
+  border-radius: 7px;
+  background: #ddc69d0b;
+  color: #e0cead;
   font: inherit;
-  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
   cursor: pointer;
 }
-
-.sundial-guide-control button:focus-visible {
-  outline: 2px solid #ddc69d;
-  outline-offset: 3px;
+.solar-info-toggle:hover,
+.solar-info-toggle[aria-pressed="true"] { background: #ddc69d20; color: #fff0d6; }
+.solar-info-toggle:focus-visible,
+.sundial-guide-control button:focus-visible { outline: 2px solid #ddc69d; outline-offset: 2px; }
+.solar-readout {
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  padding: 10px 12px 16px;
+  color: #edf0f2;
+  font-variant-numeric: tabular-nums;
 }
-
-.sundial-guide-control p {
-  margin: 5px 0 0;
-  line-height: 1.5;
-}
-
-.mini-hud {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 6;
+.solar-data-grid {
   display: grid;
-  width: min(420px, calc(100% - 32px));
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  pointer-events: none;
-}
-
-.mini-hud div {
-  border: 1px solid rgba(204, 213, 221, 0.24);
-  border-radius: 12px;
-  background: rgba(19, 22, 28, 0.72);
-  backdrop-filter: blur(18px) saturate(110%);
-  -webkit-backdrop-filter: blur(18px) saturate(110%);
-  box-shadow: 0 6px 18px rgba(5, 7, 12, 0.12), inset 0 1px rgba(255, 255, 255, 0.04);
-  padding: 8px;
-  display: grid;
-  gap: 3px;
-}
-
-.mini-hud span {
-  color: rgba(209, 216, 224, 0.72);
-  font-size: 10px;
-}
-
-.mini-hud b {
-  color: #ddc69d;
-  font-size: 12px;
-  font-weight: 900;
-  text-shadow: none;
-}
-
-.mini-hud div:first-of-type b,
-.mini-hud div:nth-of-type(3) b {
-  color: #c7deee;
-}
-
-.sundial-notice {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 4px;
+  height: 100%;
   margin: 0;
-  padding: 8px;
-  border: 1px solid rgba(221, 198, 157, 0.32);
-  border-radius: 12px;
-  background: rgba(19, 22, 28, 0.82);
-  backdrop-filter: blur(18px) saturate(110%);
-  -webkit-backdrop-filter: blur(18px) saturate(110%);
-  line-height: 1.5;
 }
-
-.mini-hud .sundial-notice span {
-  color: #e3e8ee;
-  font-size: 11px;
-  overflow-wrap: anywhere;
+.solar-data-grid > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid #ffffff0e;
+  border-radius: 10px;
+  background: #ffffff04;
 }
-
-
-/* 分栏可独立缩放，浮层密度按太阳视运动容器自身宽度调整。 */
-@container solar-scene (max-width: 640px) {
-  .mini-hud {
-    right: 10px;
-    bottom: var(--scene-bottom-inset, 10px);
-    width: min(390px, calc(100% - 20px));
-    gap: 6px;
-  }
-
-  .mini-hud div {
-    padding: 6px;
-    border-radius: 10px;
-  }
-
-  .mini-hud span {
-    font-size: 10px;
-  }
-
-  .mini-hud b {
-    font-size: 11px;
-  }
+.solar-data-grid dt { display: flex; align-items: center; gap: 6px; color: #aebac3; font-size: 11px; line-height: 1.3; }
+.solar-data-grid dd { margin: 0; color: #e5eaf0; font-size: 19px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.solar-data-grid .solar-metric-altitude { background: linear-gradient(125deg, #dcc29416, #dcc29404); border-color: #dcc29424; }
+.solar-metric-altitude dd { color: #f0d6a2; font-size: 23px; }
+.solar-data-grid .solar-metric-azimuth { background: linear-gradient(125deg, #a0c9da13, #a0c9da03); border-color: #a0c9da20; }
+.solar-metric-azimuth dd { color: #b9dce7; font-size: 23px; }
+.solar-time-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
+.sunrise-dot { background: #e4c38c; }
+.sunset-dot { background: #b2bfd9; }
+.solar-sundial-info { padding: 4px 2px; }
+.sundial-notice { display: grid; gap: 9px; margin: 0; font-size: 12px; line-height: 1.6; }
+.sundial-notice b { color: #ecd9b8; font-size: 14px; }
+.sundial-notice span { color: #bcc8d1; }
+.sundial-guide-control { margin-top: 14px; padding-top: 12px; border-top: 1px solid #ffffff12; font-size: 11px; }
+.sundial-guide-control button { padding: 6px 10px; border: 1px solid #ddc69d30; border-radius: 7px; background: #ddc69d10; color: #e8d8b9; font: inherit; cursor: pointer; }
+.sundial-guide-control p { margin: 8px 0 0; color: #b7c1cb; line-height: 1.5; }
+@container solar-panel-body (max-width: 330px) {
+  .solar-data-grid > div { padding-inline: 10px; }
+  .solar-data-grid dd { font-size: 17px; }
+  .solar-metric-altitude dd, .solar-metric-azimuth dd { font-size: 21px; }
 }
-
-@container solar-scene (max-width: 360px) {
-  .mini-hud {
-    gap: 5px;
-  }
-
-  .mini-hud div {
-    padding: 5px 6px;
-  }
-
-  .sundial-guide-control,
-  .mini-hud .sundial-notice span {
-    font-size: 10px;
-  }
-
-  .mini-hud span {
-    font-size: 9px;
-  }
-
-  .mini-hud b {
-    font-size: 10px;
-  }
+@container solar-panel-body (max-height: 205px) {
+  .solar-readout { padding: 7px 10px 14px; }
+  .solar-data-grid { gap: 5px; }
+  .solar-data-grid > div { gap: 2px; padding: 4px 9px; border-radius: 7px; }
+  .solar-data-grid dt { font-size: 10px; line-height: 12px; }
+  .solar-data-grid dd, .solar-metric-altitude dd, .solar-metric-azimuth dd { font-size: 16px; line-height: 19px; }
+  .solar-sundial-info { padding: 0; }
+  .sundial-notice { gap: 4px; font-size: 11px; line-height: 1.5; }
+  .sundial-notice b { font-size: 12px; }
+  .sundial-guide-control { margin-top: 8px; padding-top: 8px; }
+  .sundial-guide-control button { padding: 4px 8px; }
+  .sundial-guide-control p { margin-top: 5px; }
 }
-
-@container solar-scene (max-width: 270px) {
-  .mini-hud {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-
 /* v5：小容器下把太阳视运动场景整体拉远并居中；DOM 本身不再产生横向裁切 */
 .canvas-wrap canvas {
   display: block;
@@ -2107,7 +2040,6 @@ function disposeScene() {
 }
 
 @supports (-webkit-touch-callout: none) {
-  .mini-hud div,
   .legend-panel {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

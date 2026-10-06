@@ -87,7 +87,7 @@ function createSubsolarLabel() {
   return { sprite, texture, material }
 }
 
-function createLatitudeLabel(latitude: number, index: number) {
+function createLatitudeLabel(latitude: number) {
   if (typeof document === 'undefined') return null
   const canvas = document.createElement('canvas')
   // Keep uploaded texture dimensions fixed as the Sun moves; only update its pixels when text changes.
@@ -115,8 +115,7 @@ function createLatitudeLabel(latitude: number, index: number) {
   let previousText = ''
   let contentWidth = 512
   function setAltitude(altitude: number) {
-    const location = latitude === 0 ? '0°' : `${Math.abs(latitude)}°${latitude > 0 ? 'N' : 'S'}`
-    const text = `${location} · H ${formatDegreesMinutes(altitude)}`
+    const text = formatDegreesMinutes(altitude)
     if (text === previousText) return
     previousText = text
     sprite.userData.text = text
@@ -134,7 +133,7 @@ function createLatitudeLabel(latitude: number, index: number) {
     texture.repeat.x = contentWidth / canvas.width
     texture.needsUpdate = true
   }
-  return { latitude, side: index % 2 ? 1 : -1, normal, sprite, texture, material, leader, positions, setAltitude, get contentWidth() { return contentWidth } }
+  return { latitude, normal, sprite, texture, material, leader, positions, setAltitude, get contentWidth() { return contentWidth } }
 }
 
 type LabelRect = { left: number; top: number; right: number; bottom: number }
@@ -145,7 +144,7 @@ function overlaps(a: LabelRect, b: LabelRect) {
 
 /**
  * A surface ribbon, 10-degree latitude dots and a distinct subsolar ring.
- * Latitude readings use alternating callouts; the panel retains every value when a small view cannot.
+ * Latitude readings use right-side callouts; the panel retains every value when a small view cannot.
  * Attach to earthScene; all update vectors are world-space, with Sun direction pointing outward.
  */
 export function createNoonAltitudeGuide(earthRadius: number) {
@@ -318,8 +317,8 @@ export function createNoonAltitudeGuide(earthRadius: number) {
         reserved.push({ left: x - 26, right: x + 26, top: y - 26 * 1.35, bottom: y - 26 * 0.35 })
       }
     }
-    // A 40px canvas font rendered on a 22.4px-high sprite reads as 14px text.
-    const labelHeight = 22.4
+    // A 40px canvas font rendered on a 20.8px-high sprite reads as 13px text.
+    const labelHeight = 20.8
     const edgePadding = 8
     const rowGap = labelHeight + 5
     projectedCenter.copy(lastCenter)
@@ -334,24 +333,22 @@ export function createNoonAltitudeGuide(earthRadius: number) {
       if (width > viewportWidth - edgePadding * 2) return []
       const x = (projectedPosition.x + 1) * viewportWidth / 2
       const y = (1 - projectedPosition.y) * viewportHeight / 2
-      const left = THREE.MathUtils.clamp(item.side > 0 ? x + 15 : x - width - 15, edgePadding, viewportWidth - edgePadding - width)
+      const left = Math.max(edgePadding, x + 12)
+      if (left + width > viewportWidth - edgePadding) return []
       return [{ item, width, left, x, y, centerY: y, z: projectedPosition.z, worldPerPixel: pixelsToWorld(calloutPosition) }]
     })
-    // Spread each alternating column before the final collision check, preserving point-to-label leaders.
-    for (const side of [-1, 1]) {
-      const column = candidates.filter(candidate => candidate.item.side === side).sort((a, b) => a.y - b.y)
-      let previousY = edgePadding - labelHeight / 2 - 5
-      for (const candidate of column) {
-        candidate.centerY = Math.max(candidate.y, previousY + rowGap)
-        previousY = candidate.centerY
-      }
-      let nextY = viewportHeight - edgePadding + labelHeight / 2 + 5
-      for (const candidate of [...column].reverse()) {
-        candidate.centerY = Math.min(candidate.centerY, nextY - rowGap)
-        nextY = candidate.centerY
-      }
-    }
+    // Keep all readings on the right and spread them vertically, preserving their point leaders.
     candidates.sort((a, b) => a.y - b.y)
+    let previousY = edgePadding - labelHeight / 2 - 5
+    for (const candidate of candidates) {
+      candidate.centerY = Math.max(candidate.y, previousY + rowGap)
+      previousY = candidate.centerY
+    }
+    let nextY = viewportHeight - edgePadding + labelHeight / 2 + 5
+    for (const candidate of [...candidates].reverse()) {
+      candidate.centerY = Math.min(candidate.centerY, nextY - rowGap)
+      nextY = candidate.centerY
+    }
     for (const candidate of candidates) {
       const { item, width, left, x, y, z, worldPerPixel } = candidate
       let rect: LabelRect | undefined

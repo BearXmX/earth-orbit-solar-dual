@@ -10,6 +10,7 @@ defineEmits<{ ready: []; loadError: [message: string] }>()
 // 城市版独立入口，保留建筑、广告牌和街道场景。
 const props = withDefaults(defineProps<{
   axialTilt?: number
+  panelBottomInset?: number
   latitude: number
   longitude: number
   dayOfYear: number

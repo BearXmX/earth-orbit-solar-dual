@@ -87,22 +87,34 @@ test('ordinary latitudes can be hidden while either or both arc overlays still c
   }
 })
 
-test('the equator plane alone retains exactly one red equator line; ordinary latitudes retain their base appearance', () => {
+test('ordinary latitudes include a blue 0° line; the separate equator toggle highlights it red without duplication or plane coupling', () => {
   const app = createLatitudeHarness()
-  for (const [flags, expectedCount] of [[{}, 0], [{ equator: true }, 1], [{ latitudeLines: true }, 11]]) {
+  assert.equal(app.layers.equatorLine, true, 'The red equator highlight starts enabled')
+  for (const [flags, expectedCount, equatorColor, equatorOpacity] of [
+    [{}, 0],
+    [{ equator: true }, 0],
+    [{ latitudeLines: true }, 11, 'blue', 0.66],
+    [{ equatorLine: true }, 1, 'red', 1],
+    [{ latitudeLines: true, equatorLine: true }, 11, 'red', 1],
+    [{ latitudeLines: true, equator: true }, 11, 'blue', 0.66],
+    [{ equatorLine: true, equator: true }, 1, 'red', 1],
+  ]) {
     const group = app.build(flags)
     try {
       const lines = latitudeLines(group)
       assert.equal(lines.length, expectedCount)
+      assert.equal(new Set(lines.map(line => line.name)).size, expectedCount)
       if (!expectedCount) continue
       const equator = group.getObjectByName('latitude-0')
       assert.ok(equator)
-      assert.equal(equator.material.uniforms.baseOpacity.value, 1)
+      assert.equal(equator.material.uniforms.baseOpacity.value, equatorOpacity)
       const color = equator.material.uniforms.baseColor.value
-      assert.ok(color.r > color.g && color.r > color.b, 'The base equator remains red')
+      assert.ok(equatorColor === 'red' ? color.r > color.g && color.r > color.b
+        : color.b > color.g && color.g > color.r,
+      `The 0° line is ${equatorColor} for ${JSON.stringify(flags)}`)
       for (const line of lines) {
         const { uniforms } = line.material
-        assert.ok(uniforms.baseOpacity.value > 0)
+        if (line !== equator) assert.equal(uniforms.baseOpacity.value, 0.66)
         assert.equal(uniforms.dayArcEnabled.value, 0)
         assert.equal(uniforms.nightArcEnabled.value, 0)
         const day = uniforms.dayColor.value

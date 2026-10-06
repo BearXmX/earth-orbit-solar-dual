@@ -279,7 +279,7 @@ function latitudeSprites(guide) {
 test('各纬度标签使用公共度分/小数格式，纹理尺寸固定且仅格式化读数改变时重绘', async () => {
   const dom = mockCanvasDocument()
   try {
-    for (const [mode, tilt, expected] of [['dms', 23 + 26 / 60, '30°N · H 83°26′'], ['decimal', 23.5, '30°N · H 83.5°']]) {
+    for (const [mode, tilt, expected] of [['dms', 23 + 26 / 60, '83°26′'], ['decimal', 23.5, '83.5°']]) {
       const module = await import(await moduleUrl(new URL('../src/scene/createNoonAltitudeGuide.ts', import.meta.url), mode))
       const guide = module.createNoonAltitudeGuide(0.56)
       try {
@@ -288,7 +288,7 @@ test('各纬度标签使用公共度分/小数格式，纹理尺寸固定且仅�
         const labels = latitudeSprites(guide)
         assert.equal(labels.length, 19)
         assert.equal(guide.group.getObjectByName('noon-latitude-30-label').userData.text, expected)
-        assert.match(guide.group.getObjectByName('noon-latitude--90-label').userData.text, /H −23/)
+        assert.equal(guide.group.getObjectByName('noon-latitude--90-label').userData.text, mode === 'dms' ? '−23°26′' : '−23.5°')
         const textures = labels.map(label => label.material.map)
         const versions = textures.map(texture => texture.version)
         const canvases = textures.map(texture => texture.image)
@@ -300,7 +300,7 @@ test('各纬度标签使用公共度分/小数格式，纹理尺寸固定且仅�
         assert.deepEqual(canvases.map(canvas => canvas.drawings.length), calls)
         const changed = state(79, tilt)
         guide.update(changed.center, changed.sun, changed.axis, true)
-        assert.equal(guide.group.getObjectByName('noon-latitude-30-label').userData.text, mode === 'dms' ? '30°N · H 60°00′' : '30°N · H 60.0°')
+        assert.equal(guide.group.getObjectByName('noon-latitude-30-label').userData.text, mode === 'dms' ? '60°00′' : '60.0°')
         assert.ok(textures.some((texture, index) => texture.version > versions[index]))
         canvases.forEach((canvas, index) => {
           assert.equal(textures[index].image, canvas)
@@ -311,7 +311,7 @@ test('各纬度标签使用公共度分/小数格式，纹理尺寸固定且仅�
   } finally { dom.restore() }
 })
 
-test('近看展示可见侧全部纬度读数，交替引线对准采样点，远看避让且背面全部隐藏', () => {
+test('近看读数统一在右侧并缩小字号，引线对准采样点，远看避让且背面全部隐藏', () => {
   const dom = mockCanvasDocument()
   const radius = 0.56
   const guide = createNoonAltitudeGuide(radius)
@@ -349,9 +349,11 @@ test('近看展示可见侧全部纬度读数，交替引线对准采样点，�
     const labels = checkLayout()
     assert.equal(labels.length, 15, 'all front-facing 10-degree samples from 70S to 70N should fit at close view')
     for (const sprite of labels) {
-      near(bounds(sprite).h * 40 / 64, 14)
+      near(bounds(sprite).h * 40 / 64, 13)
       const baseName = sprite.name.replace(/-label$/, '')
       const dot = guide.group.getObjectByName(baseName)
+      const projectedDot = dot.getWorldPosition(new THREE.Vector3()).project(camera)
+      assert.ok(bounds(sprite).left > (projectedDot.x + 1) * width / 2, 'every reading stays to the right of its point')
       const leader = guide.group.getObjectByName(`${baseName}-leader`)
       assert.equal(leader.visible, true)
       guide.group.updateWorldMatrix(true, true)
